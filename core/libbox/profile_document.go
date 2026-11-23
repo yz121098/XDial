@@ -107,7 +107,7 @@ func redactDocumentSecrets(value interface{}) {
 	case map[string]interface{}:
 		for key, child := range value {
 			lower := strings.ToLower(key)
-			if strings.Contains(lower, "password") || strings.Contains(lower, "private_key") || strings.Contains(lower, "auth_key") || strings.Contains(lower, "token") || lower == "key" || lower == "key_path" || lower == "certificate" || lower == "certificate_path" || lower == "headers" || lower == "username" || lower == "uuid" || lower == "vmess_uuid" {
+			if strings.Contains(lower, "password") || strings.Contains(lower, "private_key") || strings.Contains(lower, "auth_key") || strings.Contains(lower, "token") || lower == "key" || lower == "key_path" || lower == "certificate" || lower == "certificate_path" || lower == "headers" || lower == "username" || lower == "uuid" || lower == "vmess_uuid" || lower == "vless_uuid" {
 				switch child.(type) {
 				case map[string]interface{}:
 					value[key] = map[string]interface{}{}

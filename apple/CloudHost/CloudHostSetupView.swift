@@ -173,25 +173,42 @@ struct CloudHostSetupView: View {
         } else {
             if let existing = report.existing {
                 Section {
-                    Label(t("这台服务器已有 XDial 代理（端口 \(existing.port)）。保持这个端口会直接使用它。",
-                            "This server already has an XDial proxy (port \(existing.port)). Keeping that port reuses it."),
+                    Label(t("这台服务器已有 XDial 代理（端口 \(existing.port)）。保持相同协议与端口会直接使用它。",
+                            "This server already has an XDial proxy (port \(existing.port)). Keeping the same protocol and port reuses it."),
                           systemImage: "arrow.triangle.2.circlepath")
                 }
             }
             Section {
-                field(t("代理端口", "Proxy port"), prompt: "1024–65535", text: $model.proxyPort, id: "cloud-host-port", numeric: true)
+                Picker(t("协议", "Protocol"), selection: $model.protocolKind) {
+                    Text(t("VLESS + Reality（推荐）", "VLESS + Reality (Recommended)")).tag(CloudHostSetupModel.ProtocolKind.vlessReality)
+                    Text("Shadowsocks 2022").tag(CloudHostSetupModel.ProtocolKind.shadowsocks)
+                }
+                .onChange(of: model.protocolKind) { _, _ in
+                    Task { await model.refreshPlan() }
+                }
+                field(t("代理端口", "Proxy port"),
+                      prompt: model.protocolKind == .vlessReality ? "443 / 1024–65535" : "1024–65535",
+                      text: $model.proxyPort, id: "cloud-host-port", numeric: true)
                     .onSubmit { Task { await model.refreshPlan() } }
-                Button(t("按这个端口重新生成改动清单", "Update the Plan for This Port")) { Task { await model.refreshPlan() } }
+                if model.protocolKind == .vlessReality {
+                    field(t("伪装域名（SNI）", "Camouflage SNI"),
+                          prompt: "www.microsoft.com",
+                          text: $model.realityServerName, id: "cloud-host-sni", plain: true)
+                        .onSubmit { Task { await model.refreshPlan() } }
+                }
+                Button(t("按当前选项重新生成改动清单", "Update the Plan")) { Task { await model.refreshPlan() } }
                 if model.planning {
                     ProgressView(t("正在生成改动清单…", "Updating the plan…"))
                 } else if let planError = model.planError {
                     Text(planError.text(chinese)).foregroundStyle(.red)
                 } else if model.plan == nil, !model.proxyPort.isEmpty {
-                    Text(t("端口已更改，请按新端口重新生成改动清单。", "The port changed; update the plan for the new port."))
+                    Text(t("配置已更改，请重新生成改动清单。", "Options changed; update the plan."))
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text(t("代理端口（Shadowsocks 2022，TCP 和 UDP）", "Proxy port (Shadowsocks 2022, TCP and UDP)"))
+                Text(model.protocolKind == .vlessReality
+                     ? t("代理协议与端口（VLESS + Reality，无需自有域名或证书）", "Protocol and port (VLESS + Reality, no domain or certificate needed)")
+                     : t("代理协议与端口（Shadowsocks 2022，TCP 和 UDP）", "Protocol and port (Shadowsocks 2022, TCP and UDP)"))
             }
             if let plan = model.plan {
                 Section {
@@ -302,7 +319,8 @@ struct CloudHostSetupView: View {
             Label(message.text(chinese), systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
-            LabeledContent(t("需要放行的端口", "Port to allow"), value: "\(deployed.port) (TCP, UDP)")
+            LabeledContent(t("需要放行的端口", "Port to allow"),
+                           value: deployed.isVLESSReality ? "\(deployed.port) (TCP)" : "\(deployed.port) (TCP, UDP)")
         } header: {
             Text(t("服务已在服务器上运行，但还没能经它访问 HTTPS", "The service runs on the server, but HTTPS through it has not worked yet"))
         } footer: {
@@ -394,14 +412,28 @@ struct CloudHostSetupView: View {
 }
 
 extension Line {
-    /// A verified line from "add my server". Its key is stored like any other
-    /// Shadowsocks password, through the app's existing credential handling.
+    /// A verified line from "add my server". Credentials are stored through the
+    /// app's existing credential handling.
     init(cloudHost draft: CloudHostLineDraft) {
-        self.init(id: "cloud-" + String(UUID().uuidString.prefix(8)).lowercased(), name: draft.name, type: "shadowsocks")
-        ssServer = draft.server
-        ssPort = draft.port
-        ssMethod = draft.method
-        ssPassword = draft.password
+        let lineID = "cloud-" + String(UUID().uuidString.prefix(8)).lowercased()
+        if draft.isVLESSReality {
+            self.init(id: lineID, name: draft.name, type: "vless")
+            vlessServer = draft.server
+            vlessPort = draft.port
+            vlessUUID = draft.uuid
+            vlessFlow = draft.flow.isEmpty ? "xtls-rprx-vision" : draft.flow
+            vlessSNI = draft.serverName
+            vlessClientFingerprint = draft.fingerprint.isEmpty ? "chrome" : draft.fingerprint
+            vlessRealityPublicKey = draft.publicKey
+            vlessRealityShortID = draft.shortID
+            udp = true
+        } else {
+            self.init(id: lineID, name: draft.name, type: "shadowsocks")
+            ssServer = draft.server
+            ssPort = draft.port
+            ssMethod = draft.method
+            ssPassword = draft.password
+        }
         enabled = true
         verified = true
     }

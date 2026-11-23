@@ -16,6 +16,7 @@ export type LineType =
   | "trojan"
   | "shadowsocks"
   | "vmess"
+  | "vless"
   | "anytls"
   | "tailscale";
 
@@ -55,6 +56,18 @@ export interface Line {
   vmess_port?: number;
   vmess_uuid?: string;
   vmess_alt_id?: number;
+
+  // VLESS (+ Reality / TLS)
+  vless_server?: string;
+  vless_port?: number;
+  vless_uuid?: string;
+  vless_flow?: string;
+  vless_sni?: string;
+  vless_client_fingerprint?: string;
+  vless_alpn?: string[];
+  vless_reality_public_key?: string;
+  vless_reality_short_id?: string;
+  vless_packet_encoding?: string;
 
   // AnyTLS
   anytls_server?: string;

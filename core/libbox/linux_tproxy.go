@@ -78,7 +78,7 @@ func validateLinuxTProxyConfig(s string, mark uint32) error {
 	for _, raw := range outbounds {
 		v, _ := raw.(map[string]any)
 		switch v["type"] {
-		case "direct", "socks", "shadowsocks", "trojan", "vmess", "anytls", "selector", "urltest":
+		case "direct", "socks", "shadowsocks", "trojan", "vmess", "vless", "anytls", "selector", "urltest":
 		default:
 			return fmt.Errorf("Linux outbound requires a protected protocol capability")
 		}

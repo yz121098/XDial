@@ -958,6 +958,34 @@ func lineRuntimeIdentity(
 			TFO:    line.TFO,
 			UDP:    line.UDP,
 		}
+	case config.LineTypeVLESS:
+		material.Configuration = struct {
+			Server            string   `json:"server"`
+			Port              int      `json:"port"`
+			UUID              string   `json:"uuid"`
+			Flow              string   `json:"flow"`
+			SNI               string   `json:"sni"`
+			ClientFingerprint string   `json:"client_fingerprint"`
+			ALPN              []string `json:"alpn"`
+			RealityPublicKey  string   `json:"reality_public_key"`
+			RealityShortID    string   `json:"reality_short_id"`
+			PacketEncoding    string   `json:"packet_encoding"`
+			AllowInsecure     bool     `json:"allow_insecure"`
+			TFO               bool     `json:"tfo"`
+		}{
+			Server:            line.VLESSServer,
+			Port:              line.VLESSPort,
+			UUID:              line.VLESSUUID,
+			Flow:              line.VLESSFlow,
+			SNI:               line.VLESSSNI,
+			ClientFingerprint: line.VLESSClientFingerprint,
+			ALPN:              line.VLESSALPN,
+			RealityPublicKey:  line.VLESSRealityPublicKey,
+			RealityShortID:    line.VLESSRealityShortID,
+			PacketEncoding:    line.VLESSPacketEncoding,
+			AllowInsecure:     line.AllowInsecure,
+			TFO:               line.TFO,
+		}
 	case config.LineTypeAnyTLS:
 		material.Configuration = struct {
 			Server                   string   `json:"server"`

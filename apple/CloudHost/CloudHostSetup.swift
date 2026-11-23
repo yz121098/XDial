@@ -29,9 +29,17 @@ struct CloudHostKey: Decodable, Equatable, Sendable {
 
 struct CloudHostReport: Decodable, Equatable, Sendable {
     struct Existing: Decodable, Equatable, Sendable {
+        let protocolKind: String?
         let port: Int
-        let method: String
+        let method: String?
+        let serverName: String?
         let active: Bool
+
+        enum CodingKeys: String, CodingKey {
+            case port, method, active
+            case protocolKind = "protocol"
+            case serverName = "server_name"
+        }
     }
 
     let hostKey: CloudHostKey
@@ -83,29 +91,97 @@ struct CloudHostPlan: Decodable, Equatable, Sendable {
         func text(_ chinese: Bool) -> String { chinese ? title : titleEN }
     }
 
+    let protocolKind: String
     let port: Int
     let method: String
+    let serverName: String
     let reuse: Bool
     let steps: [Step]
 
     init(from decoder: Decoder) throws {
-        enum Keys: String, CodingKey { case port, method, reuse, steps }
+        enum Keys: String, CodingKey {
+            case port, method, reuse, steps
+            case protocolKind = "protocol"
+            case serverName = "server_name"
+        }
         let c = try decoder.container(keyedBy: Keys.self)
+        protocolKind = try c.decodeIfPresent(String.self, forKey: .protocolKind) ?? "shadowsocks"
         port = try c.decode(Int.self, forKey: .port)
-        method = try c.decode(String.self, forKey: .method)
+        method = try c.decodeIfPresent(String.self, forKey: .method) ?? ""
+        serverName = try c.decodeIfPresent(String.self, forKey: .serverName) ?? ""
         reuse = try c.decodeIfPresent(Bool.self, forKey: .reuse) ?? false
         steps = try c.decodeIfPresent([Step].self, forKey: .steps) ?? []
     }
 }
 
-/// The proxy that setup created or found. `password` is the Shadowsocks key the
-/// line keeps; it is saved only through the app's existing credential storage.
+/// The proxy that setup created or found. Credentials stay in memory until saved
+/// through the app's existing credential storage.
 struct CloudHostResult: Decodable, Equatable, Sendable {
+    let protocolKind: String
     let server: String
     let port: Int
     let method: String
     let password: String
+    let uuid: String
+    let flow: String
+    let serverName: String
+    let publicKey: String
+    let shortID: String
+    let fingerprint: String
     let reused: Bool
+
+    var isVLESSReality: Bool { protocolKind == "vless-reality" }
+
+    init(
+        protocolKind: String = "shadowsocks",
+        server: String,
+        port: Int,
+        method: String = "",
+        password: String = "",
+        uuid: String = "",
+        flow: String = "",
+        serverName: String = "",
+        publicKey: String = "",
+        shortID: String = "",
+        fingerprint: String = "",
+        reused: Bool
+    ) {
+        self.protocolKind = protocolKind
+        self.server = server
+        self.port = port
+        self.method = method
+        self.password = password
+        self.uuid = uuid
+        self.flow = flow
+        self.serverName = serverName
+        self.publicKey = publicKey
+        self.shortID = shortID
+        self.fingerprint = fingerprint
+        self.reused = reused
+    }
+
+    init(from decoder: Decoder) throws {
+        enum Keys: String, CodingKey {
+            case server, port, method, password, uuid, flow, fingerprint, reused
+            case protocolKind = "protocol"
+            case serverName = "server_name"
+            case publicKey = "public_key"
+            case shortID = "short_id"
+        }
+        let c = try decoder.container(keyedBy: Keys.self)
+        protocolKind = try c.decodeIfPresent(String.self, forKey: .protocolKind) ?? "shadowsocks"
+        server = try c.decode(String.self, forKey: .server)
+        port = try c.decode(Int.self, forKey: .port)
+        method = try c.decodeIfPresent(String.self, forKey: .method) ?? ""
+        password = try c.decodeIfPresent(String.self, forKey: .password) ?? ""
+        uuid = try c.decodeIfPresent(String.self, forKey: .uuid) ?? ""
+        flow = try c.decodeIfPresent(String.self, forKey: .flow) ?? ""
+        serverName = try c.decodeIfPresent(String.self, forKey: .serverName) ?? ""
+        publicKey = try c.decodeIfPresent(String.self, forKey: .publicKey) ?? ""
+        shortID = try c.decodeIfPresent(String.self, forKey: .shortID) ?? ""
+        fingerprint = try c.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
+        reused = try c.decodeIfPresent(Bool.self, forKey: .reused) ?? false
+    }
 }
 
 struct CloudHostMeasurement: Decodable, Equatable, Sendable {
@@ -133,10 +209,19 @@ struct CloudHostEvent: Decodable, Equatable, Sendable {
 /// What the app saves as a new line once the proxy is verified.
 struct CloudHostLineDraft: Equatable, Sendable {
     var name: String
+    let protocolKind: String
     let server: String
     let port: Int
     let method: String
     let password: String
+    let uuid: String
+    let flow: String
+    let serverName: String
+    let publicKey: String
+    let shortID: String
+    let fingerprint: String
+
+    var isVLESSReality: Bool { protocolKind == "vless-reality" }
 }
 
 private struct CloudHostReply<Payload: Decodable>: Decodable {
@@ -189,6 +274,12 @@ final class CloudHostSetupModel: ObservableObject {
         var id: String { rawValue }
     }
 
+    enum ProtocolKind: String, CaseIterable, Identifiable {
+        case vlessReality = "vless-reality"
+        case shadowsocks = "shadowsocks"
+        var id: String { rawValue }
+    }
+
     enum Stage: Equatable {
         case server
         case scanning
@@ -211,8 +302,18 @@ final class CloudHostSetupModel: ObservableObject {
     @Published var password = ""
     @Published var privateKey = ""
     @Published var passphrase = ""
-    /// Editing the port invalidates the plan built for the old one, so the
-    /// deploy button can never apply a plan the user is no longer looking at.
+    /// Editing the protocol, SNI or port invalidates the plan built for the old
+    /// configuration, so the deploy button can never apply a stale plan.
+    @Published var protocolKind: ProtocolKind = .vlessReality {
+        didSet {
+            if protocolKind != oldValue { invalidatePlan() }
+        }
+    }
+    @Published var realityServerName = "www.microsoft.com" {
+        didSet {
+            if realityServerName != oldValue { invalidatePlan() }
+        }
+    }
     @Published var proxyPort = "" {
         didSet {
             if proxyPort != oldValue { invalidatePlan() }
@@ -301,6 +402,12 @@ final class CloudHostSetupModel: ObservableObject {
         case .success(let report):
             // A new inspection supersedes any plan built from the previous one.
             invalidatePlan()
+            if let existing = report.existing {
+                protocolKind = existing.protocolKind == "vless-reality" ? .vlessReality : .shadowsocks
+                if let sni = existing.serverName, !sni.isEmpty {
+                    realityServerName = sni
+                }
+            }
             proxyPort = String(report.suggestedPort)
             stage = .review(report)
             if report.blocking.isEmpty { await refreshPlan() }
@@ -310,17 +417,37 @@ final class CloudHostSetupModel: ObservableObject {
         }
     }
 
+    private func optionsJSON(port: Int) -> String {
+        var opts: [String: Any] = [
+            "protocol": protocolKind.rawValue,
+            "port": port,
+        ]
+        if protocolKind == .vlessReality {
+            opts["server_name"] = realityServerName.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let data = (try? JSONSerialization.data(withJSONObject: opts)) ?? Data()
+        return String(decoding: data, as: UTF8.self)
+    }
+
     func refreshPlan() async {
         planGeneration += 1
         let generation = planGeneration
-        guard let port = Int(proxyPort), (1024...65535).contains(port) else {
+        let allowedPort: Bool = {
+            guard let port = Int(proxyPort) else { return false }
+            if protocolKind == .vlessReality && port == 443 { return true }
+            return (1024...65535).contains(port)
+        }()
+        guard let port = Int(proxyPort), allowedPort else {
             plan = nil
             planning = false
-            planError = CloudHostMessage(code: "port_invalid", message: "请填写 1024–65535 之间的端口", messageEN: "Enter a port between 1024 and 65535")
+            planError = protocolKind == .vlessReality
+                ? CloudHostMessage(code: "port_invalid", message: "请填写 443 或 1024–65535 之间的端口", messageEN: "Enter port 443 or a port between 1024 and 65535")
+                : CloudHostMessage(code: "port_invalid", message: "请填写 1024–65535 之间的端口", messageEN: "Enter a port between 1024 and 65535")
             return
         }
         planning = true
-        let result = await backend.call(CloudHostPlan.self) { $0.plan(port) }
+        let request = optionsJSON(port: port)
+        let result = await backend.call(CloudHostPlan.self) { $0.plan(withOptions: request) }
         // A newer edit or refresh owns the plan now; drop this stale answer.
         guard generation == planGeneration else { return }
         planning = false
@@ -343,8 +470,8 @@ final class CloudHostSetupModel: ObservableObject {
         let sink = CloudHostEventSink { [weak self] event in
             Task { @MainActor in self?.events.append(event) }
         }
-        let port = plan.port
-        let result = await backend.call(CloudHostResult.self) { $0.deploy(port, listener: sink) }
+        let request = optionsJSON(port: plan.port)
+        let result = await backend.call(CloudHostResult.self) { $0.deploy(withOptions: request, listener: sink) }
         working = false
         switch result {
         case .success(let deployed):
@@ -375,10 +502,24 @@ final class CloudHostSetupModel: ObservableObject {
     func verify(_ deployed: CloudHostResult) async {
         working = true
         stage = .verifying(deployed)
-        let line: [String: Any] = [
-            "id": "cloud-host-check", "name": "check", "type": "shadowsocks", "enabled": true,
-            "ss_server": deployed.server, "ss_port": deployed.port, "ss_method": deployed.method, "ss_password": deployed.password,
-        ]
+        let line: [String: Any]
+        if deployed.isVLESSReality {
+            line = [
+                "id": "cloud-host-check", "name": "check", "type": "vless", "enabled": true,
+                "vless_server": deployed.server, "vless_port": deployed.port,
+                "vless_uuid": deployed.uuid, "vless_flow": deployed.flow,
+                "vless_sni": deployed.serverName,
+                "vless_client_fingerprint": deployed.fingerprint.isEmpty ? "chrome" : deployed.fingerprint,
+                "vless_reality_public_key": deployed.publicKey,
+                "vless_reality_short_id": deployed.shortID,
+                "udp": true,
+            ]
+        } else {
+            line = [
+                "id": "cloud-host-check", "name": "check", "type": "shadowsocks", "enabled": true,
+                "ss_server": deployed.server, "ss_port": deployed.port, "ss_method": deployed.method, "ss_password": deployed.password,
+            ]
+        }
         let json = String(decoding: (try? JSONSerialization.data(withJSONObject: line)) ?? Data(), as: UTF8.self)
         let raw = await Task.detached(priority: .userInitiated) { LibboxProbeStandaloneLineThroughput(json, 40000) }.value
         working = false
@@ -399,8 +540,20 @@ final class CloudHostSetupModel: ObservableObject {
     func draft() -> CloudHostLineDraft? {
         guard case .verified(let deployed, _) = stage else { return nil }
         let name = lineName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return CloudHostLineDraft(name: name.isEmpty ? defaultLineName : name, server: deployed.server,
-                                  port: deployed.port, method: deployed.method, password: deployed.password)
+        return CloudHostLineDraft(
+            name: name.isEmpty ? defaultLineName : name,
+            protocolKind: deployed.protocolKind,
+            server: deployed.server,
+            port: deployed.port,
+            method: deployed.method,
+            password: deployed.password,
+            uuid: deployed.uuid,
+            flow: deployed.flow,
+            serverName: deployed.serverName,
+            publicKey: deployed.publicKey,
+            shortID: deployed.shortID,
+            fingerprint: deployed.fingerprint
+        )
     }
 
     func markSaved() {

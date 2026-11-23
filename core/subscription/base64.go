@@ -11,14 +11,50 @@ import (
 	"github.com/kafeifei/xdial/core/config"
 )
 
+// IsShareURI reports whether text begins with a supported proxy share link scheme.
+func IsShareURI(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if idx := strings.IndexAny(trimmed, "\r\n"); idx >= 0 {
+		trimmed = strings.TrimSpace(trimmed[:idx])
+	}
+	lower := strings.ToLower(trimmed)
+	for _, prefix := range []string{"vless://", "ss://", "trojan://", "vmess://", "anytls://"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseShareURIs parses one or more proxy share links (raw text or Base64-encoded)
+// and validates that every returned line can construct a usable outbound.
+func ParseShareURIs(content string) ([]config.Line, error) {
+	lines, err := parseBase64(content)
+	if err != nil {
+		return nil, fmt.Errorf("未识别到有效的节点分享链接（支持 vless://、ss://、trojan://、vmess://、anytls://）")
+	}
+	usable := make([]config.Line, 0, len(lines))
+	for i := range lines {
+		if lines[i].Type == config.LineTypeAnyTLS && lines[i].TFO {
+			lines[i].TFO = false
+		}
+		if !config.LineHasUsableOutbound(&lines[i]) {
+			return nil, fmt.Errorf("第 %d 条 %s 分享链接参数不完整或不受支持", i+1, lines[i].Type)
+		}
+		usable = append(usable, lines[i])
+	}
+	return usable, nil
+}
+
 func parseBase64(content string) ([]config.Line, error) {
 	decoded := tryBase64Decode(strings.TrimSpace(content))
+	decoded = strings.ReplaceAll(decoded, "\r\n", "\n")
 	textLines := strings.Split(decoded, "\n")
 
 	var results []config.Line
 	for _, line := range textLines {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		line = strings.TrimSpace(strings.Trim(strings.TrimSpace(line), `"'`))
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
 		ln, ok := uriToLine(line)
@@ -51,7 +87,15 @@ func tryBase64Decode(s string) string {
 	return s
 }
 
+func normalizeURIScheme(uri string) string {
+	if idx := strings.Index(uri, "://"); idx > 0 {
+		return strings.ToLower(uri[:idx]) + uri[idx:]
+	}
+	return uri
+}
+
 func uriToLine(uri string) (config.Line, bool) {
+	uri = normalizeURIScheme(strings.TrimSpace(uri))
 	switch {
 	case strings.HasPrefix(uri, "ss://"):
 		return parseSS(uri)
@@ -59,6 +103,8 @@ func uriToLine(uri string) (config.Line, bool) {
 		return parseVMess(uri)
 	case strings.HasPrefix(uri, "trojan://"):
 		return parseTrojan(uri)
+	case strings.HasPrefix(uri, "vless://"):
+		return parseVLESS(uri)
 	case strings.HasPrefix(uri, "anytls://"):
 		return parseAnyTLS(uri)
 	default:
@@ -195,6 +241,129 @@ func parseTrojan(uri string) (config.Line, bool) {
 		TrojanPassword: password,
 		TrojanSNI:      sni,
 	}, true
+}
+
+// vless://uuid@server:port?security=reality&pbk=xxx&sid=xxx&sni=xxx&fp=chrome&flow=xtls-rprx-vision#name
+func parseVLESS(uri string) (config.Line, bool) {
+	rawFragment := ""
+	if idx := strings.LastIndex(uri, "#"); idx >= 0 {
+		rawFragment = uri[idx+1:]
+		uri = uri[:idx]
+	}
+	u, err := url.Parse(uri)
+	if err != nil || u.User == nil {
+		return config.Line{}, false
+	}
+
+	userUUID := strings.TrimSpace(u.User.Username())
+	server := strings.TrimSpace(u.Hostname())
+	port, _ := strconv.Atoi(u.Port())
+	name := strings.TrimSpace(rawFragment)
+	if unescaped, uErr := url.PathUnescape(rawFragment); uErr == nil {
+		name = strings.TrimSpace(unescaped)
+	} else if unescaped, qErr := url.QueryUnescape(rawFragment); qErr == nil {
+		name = strings.TrimSpace(unescaped)
+	}
+	query := u.Query()
+
+	if server == "" || port == 0 || userUUID == "" {
+		return config.Line{}, false
+	}
+	if name == "" {
+		name = server
+	}
+
+	if enc := strings.ToLower(strings.TrimSpace(query.Get("encryption"))); enc != "" && enc != "none" {
+		return config.Line{}, false
+	}
+	if netType := strings.ToLower(strings.TrimSpace(firstQueryValue(query, "type", "network"))); netType != "" && netType != "tcp" && netType != "raw" {
+		return config.Line{}, false
+	}
+	if headerType := strings.ToLower(strings.TrimSpace(query.Get("headerType"))); headerType != "" && headerType != "none" {
+		return config.Line{}, false
+	}
+
+	security := strings.ToLower(strings.TrimSpace(query.Get("security")))
+	publicKey := strings.TrimSpace(firstQueryValue(query, "pbk", "public_key", "public-key", "publicKey"))
+	shortIDVal := strings.TrimSpace(firstQueryValue(query, "sid", "short_id", "short-id", "shortId"))
+	switch security {
+	case "reality":
+		if publicKey == "" {
+			return config.Line{}, false
+		}
+	case "tls":
+		if publicKey != "" || shortIDVal != "" {
+			return config.Line{}, false
+		}
+	case "":
+		if publicKey == "" {
+			return config.Line{}, false
+		}
+	default:
+		return config.Line{}, false
+	}
+
+	sni := strings.TrimSpace(firstQueryValue(query, "sni", "peer", "server_name", "servername"))
+	if publicKey == "" && sni == "" {
+		sni = server
+	}
+	fingerprint := normalizeAnyTLSFingerprint(firstQueryValue(
+		query,
+		"fp",
+		"fingerprint",
+		"client-fingerprint",
+		"client_fingerprint",
+	))
+	if publicKey != "" && fingerprint == "" {
+		fingerprint = "chrome"
+	}
+
+	alpn, ok := anyTLSQueryALPN(query)
+	if !ok {
+		return config.Line{}, false
+	}
+
+	line := config.Line{
+		ID:                     shortID(),
+		Name:                   name,
+		Type:                   config.LineTypeVLESS,
+		Enabled:                true,
+		VLESSServer:            server,
+		VLESSPort:              port,
+		VLESSUUID:              userUUID,
+		VLESSFlow:              strings.TrimSpace(query.Get("flow")),
+		VLESSSNI:               sni,
+		VLESSClientFingerprint: fingerprint,
+		VLESSALPN:              alpn,
+		VLESSRealityPublicKey:  publicKey,
+		VLESSRealityShortID:    shortIDVal,
+		VLESSPacketEncoding:    strings.ToLower(strings.TrimSpace(firstQueryValue(query, "packetEncoding", "packet-encoding", "packet_encoding"))),
+		UDP:                    true,
+	}
+	line.AllowInsecure, ok = anyTLSQueryBool(
+		query,
+		"insecure",
+		"allow_insecure",
+		"allowInsecure",
+		"skip-cert-verify",
+	)
+	if !ok {
+		return config.Line{}, false
+	}
+	if _, hasUDP := firstQueryEntry(query, "udp", "udp-relay"); hasUDP {
+		line.UDP, ok = anyTLSQueryBool(query, "udp", "udp-relay")
+		if !ok {
+			return config.Line{}, false
+		}
+	}
+	line.TFO, ok = anyTLSQueryBool(query, "tfo")
+	if !ok {
+		return config.Line{}, false
+	}
+	if !config.LineHasUsableOutbound(&line) {
+		return config.Line{}, false
+	}
+	return line, true
 }
 
 // anytls://password@server:port?sni=xxx&insecure=1#name

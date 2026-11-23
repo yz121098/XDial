@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/protocol/trojan"
 	"github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing-box/protocol/vmess"
 	"github.com/sagernet/sing/service"
 )
@@ -66,6 +67,7 @@ func outboundRegistry() *outbound.Registry {
 	trojan.RegisterOutbound(registry)
 	shadowsocks.RegisterOutbound(registry)
 	vmess.RegisterOutbound(registry)
+	vless.RegisterOutbound(registry)
 	anytls.RegisterOutbound(registry)
 	registerVPNOutbound(registry)
 	registerTailscaleRuntimeOutbound(registry)

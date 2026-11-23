@@ -423,6 +423,7 @@ struct LinesTab: View {
     var groupsOnly = false
     @EnvironmentObject var state: AppState
     @State private var showAddSub = false
+    @State private var showImportLink = false
     @State private var showCloudHostSetup = false
     @State private var draggedItem: SettingsReorderItem?
     @State private var searchText = ""
@@ -491,6 +492,12 @@ struct LinesTab: View {
                     lineTypeButton(state.tr("添加线路组", "Add Line Group"), type: "urltest", icon: "plus")
                 } else {
                     Menu {
+                        Button {
+                            showImportLink = true
+                        } label: {
+                            Label(state.tr("从分享链接导入…", "Import from Share Link…"), systemImage: "link.badge.plus")
+                        }
+                        Divider()
                         lineTypeButton("AnyConnect", type: "vpn", icon: "lock.shield")
                         lineTypeButton(
                             "Trojan",
@@ -506,6 +513,11 @@ struct LinesTab: View {
                             "VMess",
                             type: "vmess",
                             icon: "point.3.connected.trianglepath.dotted"
+                        )
+                        lineTypeButton(
+                            "VLESS + Reality",
+                            type: "vless",
+                            icon: "bolt.shield"
                         )
                         lineTypeButton(
                             "AnyTLS",
@@ -537,6 +549,9 @@ struct LinesTab: View {
         .sheet(isPresented: $showCloudHostSetup) {
             MacCloudHostSetupSheet(state: state)
         }
+        .sheet(isPresented: $showImportLink) {
+            MacImportShareLinkSheet(state: state)
+        }
     }
 
     private func lineTypeButton(
@@ -559,6 +574,7 @@ struct LinesTab: View {
         case "trojan": name = "Trojan 节点"
         case "shadowsocks": name = "SS 节点"
         case "vmess": name = "VMess 节点"
+        case "vless": name = "VLESS 节点"
         case "anytls": name = "AnyTLS 节点"
         case "tailscale": name = "Tailscale"
         default: name = "节点"
@@ -850,7 +866,7 @@ struct LineRow: View {
                             .textFieldStyle(.roundedBorder).font(.caption)
                     }
                     detailFields
-                    if ["trojan", "shadowsocks", "vmess", "anytls"].contains(line.type) {
+                    if ["trojan", "shadowsocks", "vmess", "vless", "anytls"].contains(line.type) {
                         DisclosureGroup("高级选项（sing-box）") {
                             NativeLineOptionsEditor(line: $line, readOnly: sourceOwned)
                         }
@@ -941,6 +957,24 @@ struct LineRow: View {
             intField("端口", $line.vmessPort)
             secureField("UUID", $line.vmessUUID)
             intField("Alter ID", $line.vmessAltID)
+        case "vless":
+            field("服务器", $line.vlessServer)
+            boundedIntField("端口", $line.vlessPort, range: 1...65535)
+            secureField("UUID", $line.vlessUUID)
+            field("SNI", $line.vlessSNI, placeholder: "www.microsoft.com")
+            vlessFlowField
+            vlessFingerprintField
+            field("Reality 公钥", $line.vlessRealityPublicKey, placeholder: "留空则使用普通 TLS")
+            field("Short ID", $line.vlessRealityShortID, placeholder: "0–16 位十六进制")
+            if line.vlessRealityPublicKey.isEmpty {
+                insecureToggle
+            }
+            if let issue = line.vlessOptionsValidationIssue {
+                Label(issue, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(XDialPalette.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         case "anytls":
             field("服务器", $line.anytlsServer)
             boundedIntField("端口", $line.anytlsPort, range: 1...65535)
@@ -1350,6 +1384,59 @@ struct LineRow: View {
                 Text("仅自签证书的服务器才需要开启；开启后无法防中间人窃取凭据")
                     .font(.caption2).foregroundStyle(.secondary)
             }
+            Spacer()
+        }
+    }
+
+    private var vlessFlowField: some View {
+        HStack {
+            Text("Flow")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+            Picker("", selection: SwiftUI.Binding(
+                get: { line.vlessFlow },
+                set: { value in
+                    guard line.vlessFlow != value else { return }
+                    line.vlessFlow = value
+                    markLineChanged()
+                }
+            )) {
+                Text("xtls-rprx-vision").tag("xtls-rprx-vision")
+                Text(state.tr("无", "None")).tag("")
+            }
+            .pickerStyle(.menu)
+            .disabled(sourceOwned)
+            .labelsHidden()
+            Spacer()
+        }
+    }
+
+    private var vlessFingerprintField: some View {
+        HStack {
+            Text(state.tr("TLS 指纹", "TLS Fingerprint"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+            Picker("", selection: SwiftUI.Binding(
+                get: { line.vlessClientFingerprint },
+                set: { value in
+                    guard line.vlessClientFingerprint != value else { return }
+                    line.vlessClientFingerprint = value
+                    markLineChanged()
+                }
+            )) {
+                ForEach(
+                    Line.anyTLSSupportedClientFingerprints,
+                    id: \.self
+                ) { fingerprint in
+                    Text(anyTLSFingerprintLabel(fingerprint))
+                        .tag(fingerprint)
+                }
+            }
+            .pickerStyle(.menu)
+            .disabled(sourceOwned)
+            .labelsHidden()
             Spacer()
         }
     }
@@ -2949,6 +3036,9 @@ private func lineBriefInfo(_ line: Line, state: AppState, net: NetworkInfo) -> S
     case "vmess":
         guard !line.vmessServer.isEmpty else { return "" }
         return "\(line.vmessServer):\(line.vmessPort)"
+    case "vless":
+        guard !line.vlessServer.isEmpty else { return "" }
+        return "\(line.vlessServer):\(line.vlessPort)"
     case "anytls":
         guard !line.anytlsServer.isEmpty else { return "" }
         return "\(line.anytlsServer):\(line.anytlsPort)"
@@ -2966,6 +3056,7 @@ private func lineTypeLabel(_ line: Line) -> String {
     case "trojan": return "Trojan"
     case "shadowsocks": return "SS"
     case "vmess": return "VMess"
+    case "vless": return "VLESS"
     case "anytls": return "AnyTLS"
     case "tailscale": return "Tailscale"
     default: return line.type
@@ -3052,5 +3143,82 @@ struct MacCloudHostSetupSheet: View {
         .frame(width: 560, height: 640)
         .interactiveDismissDisabled(model.stage == .deploying)
         .onDisappear { model.close() }
+    }
+}
+
+struct MacImportShareLinkSheet: View {
+    @ObservedObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var linkText = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(state.tr("从分享链接导入线路", "Import Line from Share Link"))
+                    .font(.headline)
+                Spacer()
+                Button(state.tr("粘贴剪贴板", "Paste Clipboard")) {
+                    if let str = NSPasteboard.general.string(forType: .string), !str.isEmpty {
+                        linkText = str
+                    }
+                }
+                .controlSize(.small)
+            }
+            Text(state.tr(
+                "支持 vless://（含 Reality）、ss://、trojan://、vmess://、anytls://（每行一条或 Base64）",
+                "Supports vless:// (Reality / TLS), ss://, trojan://, vmess://, anytls:// (one per line or Base64)"
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            TextEditor(text: $linkText)
+                .font(.system(.caption, design: .monospaced))
+                .frame(minHeight: 96)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(XDialPalette.danger)
+            }
+
+            HStack {
+                Spacer()
+                Button(state.tr("取消", "Cancel")) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button(state.tr("导入", "Import")) { importNow() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
+    }
+
+    private func importNow() {
+        errorMessage = nil
+        var nsErr: NSError?
+        let raw = LibboxParseShareLinks(linkText, &nsErr)
+        if let nsErr {
+            errorMessage = nsErr.localizedDescription
+            return
+        }
+        guard let decoded = try? JSONDecoder().decode([Line].self, from: Data(raw.utf8)), !decoded.isEmpty else {
+            errorMessage = state.tr("无法解析分享链接", "Could not parse share link")
+            return
+        }
+        var lastID: String?
+        for var item in decoded {
+            item.id = item.type + "-" + String(UUID().uuidString.prefix(6)).lowercased()
+            item.enabled = true
+            state.editingProfile.lines.append(item)
+            lastID = item.id
+        }
+        if decoded.count == 1, let lastID {
+            state.editorPosition.expandedLineIDs.insert(lastID)
+        }
+        state.saveEditingProfile()
+        dismiss()
     }
 }

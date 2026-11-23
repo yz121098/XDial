@@ -558,7 +558,7 @@ func sorted(values []string) []string {
 // so credentials never reach a fingerprint that the tool prints or compares.
 func withoutSecrets(line config.Line) config.Line {
 	line.VPNUsername, line.VPNPassword, line.TrojanPassword, line.SSPass = "", "", "", ""
-	line.VMessUUID, line.AnyTLSPassword, line.TailscaleAuthKey = "", "", ""
+	line.VMessUUID, line.VLESSUUID, line.AnyTLSPassword, line.TailscaleAuthKey = "", "", "", ""
 	return line
 }
 

@@ -188,6 +188,7 @@ test-patched-tailscale: $(PATCHED_WORKFILE)
 
 test-patched-sing-box: $(PATCHED_WORKFILE)
 	$(PATCHED_GO_ENV) go test -tags '$(DESKTOP_GO_TAGS)' \
+		github.com/sagernet/sing-box/common/tls \
 		github.com/sagernet/sing-box/protocol/tailscale \
 		github.com/sagernet/sing-box/dns \
 		github.com/sagernet/sing-box/dns/transport/hosts \

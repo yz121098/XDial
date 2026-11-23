@@ -166,10 +166,12 @@ enum MobileConfigurationService {
         line.trojanPassword = ""
         line.ssPassword = ""
         line.vmessUUID = ""
+        line.vlessUUID = ""
         line.vpnServer = removingURLCredentials(line.vpnServer)
         line.trojanServer = removingURLCredentials(line.trojanServer)
         line.ssServer = removingURLCredentials(line.ssServer)
         line.vmessServer = removingURLCredentials(line.vmessServer)
+        line.vlessServer = removingURLCredentials(line.vlessServer)
     }
 
     private static func normalizeLegacyLineTypes(in profile: inout Profile) {
@@ -229,7 +231,7 @@ enum MobileConfigurationService {
         try validateIDs(profile.subscriptions.map(\.id), kind: "subscription")
 
         let supportedLineTypes: Set<String> = [
-            "direct", "vpn", "trojan", "shadowsocks", "ss", "vmess", "tailscale", "selector", "urltest", "anytls",
+            "direct", "vpn", "trojan", "shadowsocks", "ss", "vmess", "vless", "tailscale", "selector", "urltest", "anytls",
         ]
         let allLines = profile.lines + profile.subscriptions.flatMap(\.lines)
         if let unsupported = allLines.first(where: { !supportedLineTypes.contains($0.type) }) {
@@ -537,6 +539,7 @@ enum MobileDiagnosticsService {
                 line.trojanServer, line.trojanPassword, line.trojanSNI,
                 line.ssServer, line.ssPassword,
                 line.vmessServer, line.vmessUUID,
+                line.vlessServer, line.vlessUUID, line.vlessSNI, line.vlessRealityPublicKey, line.vlessRealityShortID,
                 line.tailscaleExitNode, line.anytlsServer, line.anytlsPassword, line.anytlsSNI, line.groupURL,
             ] where !value.isEmpty {
                 values.insert(value)

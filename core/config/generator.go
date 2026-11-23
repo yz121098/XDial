@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -2985,6 +2986,94 @@ func applyTransport(ob map[string]interface{}, line *Line) {
 	}
 }
 
+func validALPNProtocols(protocols []string) bool {
+	if len(protocols) > maxAnyTLSALPNProtocols {
+		return false
+	}
+	seenALPN := make(map[string]struct{}, len(protocols))
+	for _, protocol := range protocols {
+		if protocol == "" ||
+			len(protocol) > maxAnyTLSALPNProtocolBytes ||
+			!utf8.ValidString(protocol) ||
+			strings.IndexFunc(protocol, unicode.IsControl) >= 0 {
+			return false
+		}
+		if _, duplicate := seenALPN[protocol]; duplicate {
+			return false
+		}
+		seenALPN[protocol] = struct{}{}
+	}
+	return true
+}
+
+func decodeRealityPublicKey(raw string) (string, bool) {
+	if raw == "" || strings.TrimSpace(raw) != raw {
+		return "", false
+	}
+	trimmed := strings.TrimSuffix(raw, "=")
+	if len(trimmed) != 43 || len(raw) > 44 {
+		return "", false
+	}
+	urlSafe := strings.NewReplacer("+", "-", "/", "_").Replace(trimmed)
+	decoded, err := base64.RawURLEncoding.DecodeString(urlSafe)
+	if err != nil || len(decoded) != 32 {
+		return "", false
+	}
+	return base64.RawURLEncoding.EncodeToString(decoded), true
+}
+
+func normalizeRealityShortID(raw string) (string, bool) {
+	if raw == "" {
+		return "", true
+	}
+	if strings.TrimSpace(raw) != raw || len(raw) > 16 || len(raw)%2 != 0 {
+		return "", false
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil || len(decoded) > 8 {
+		return "", false
+	}
+	return strings.ToLower(raw), true
+}
+
+func validVLESSOptions(line *Line) bool {
+	switch line.VLESSFlow {
+	case "", "xtls-rprx-vision":
+	default:
+		return false
+	}
+	switch line.VLESSPacketEncoding {
+	case "", "xudp", "packetaddr":
+	default:
+		return false
+	}
+	if line.VLESSClientFingerprint != "" {
+		if _, exists := anyTLSClientFingerprints[line.VLESSClientFingerprint]; !exists {
+			return false
+		}
+	}
+	if !validALPNProtocols(line.VLESSALPN) {
+		return false
+	}
+	if line.VLESSRealityPublicKey == "" {
+		return line.VLESSRealityShortID == ""
+	}
+	if _, ok := decodeRealityPublicKey(line.VLESSRealityPublicKey); !ok {
+		return false
+	}
+	if _, ok := normalizeRealityShortID(line.VLESSRealityShortID); !ok {
+		return false
+	}
+	sni := strings.TrimSpace(line.VLESSSNI)
+	if sni == "" || sni != line.VLESSSNI {
+		return false
+	}
+	if _, err := netip.ParseAddr(sni); err == nil {
+		return false
+	}
+	return true
+}
+
 func validAnyTLSOptions(line *Line) bool {
 	if (line.AnyTLSIdleSessionCheckInterval != 0 &&
 		(line.AnyTLSIdleSessionCheckInterval < minAnyTLSDurationSeconds ||
@@ -3001,23 +3090,7 @@ func validAnyTLSOptions(line *Line) bool {
 			return false
 		}
 	}
-	if len(line.AnyTLSALPN) > maxAnyTLSALPNProtocols {
-		return false
-	}
-	seenALPN := make(map[string]struct{}, len(line.AnyTLSALPN))
-	for _, protocol := range line.AnyTLSALPN {
-		if protocol == "" ||
-			len(protocol) > maxAnyTLSALPNProtocolBytes ||
-			!utf8.ValidString(protocol) ||
-			strings.IndexFunc(protocol, unicode.IsControl) >= 0 {
-			return false
-		}
-		if _, duplicate := seenALPN[protocol]; duplicate {
-			return false
-		}
-		seenALPN[protocol] = struct{}{}
-	}
-	return true
+	return validALPNProtocols(line.AnyTLSALPN)
 }
 
 // configureTransparentProxyEndpointBootstrap isolates proxy endpoint lookup from
@@ -3029,7 +3102,7 @@ func configureTransparentProxyEndpointBootstrap(outbounds []map[string]interface
 	for _, outbound := range outbounds {
 		outboundType, _ := outbound["type"].(string)
 		switch outboundType {
-		case "trojan", "shadowsocks", "vmess", "anytls":
+		case "trojan", "shadowsocks", "vmess", "vless", "anytls":
 		default:
 			continue
 		}
@@ -3108,6 +3181,73 @@ func buildEditableProxyOutbound(line *Line) map[string]interface{} {
 			"alter_id":    line.VMessAltID,
 		}
 		applyTransport(ob, line)
+		return ob
+	case LineTypeVLESS:
+		if line.VLESSServer == "" || line.VLESSPort <= 0 || line.VLESSPort > 65535 || !validVLESSOptions(line) {
+			return nil
+		}
+		if _, err := uuid.Parse(line.VLESSUUID); err != nil {
+			return nil
+		}
+		serverName := line.VLESSSNI
+		if serverName == "" {
+			serverName = line.VLESSServer
+		}
+		tls := map[string]interface{}{
+			"enabled":     true,
+			"server_name": serverName,
+		}
+		if len(line.VLESSALPN) > 0 {
+			tls["alpn"] = line.VLESSALPN
+		}
+		if line.VLESSRealityPublicKey != "" {
+			pubKey, _ := decodeRealityPublicKey(line.VLESSRealityPublicKey)
+			shortID, _ := normalizeRealityShortID(line.VLESSRealityShortID)
+			fingerprint := line.VLESSClientFingerprint
+			if fingerprint == "" {
+				fingerprint = "chrome"
+			}
+			tls["utls"] = map[string]interface{}{
+				"enabled":     true,
+				"fingerprint": fingerprint,
+			}
+			reality := map[string]interface{}{
+				"enabled":    true,
+				"public_key": pubKey,
+			}
+			if shortID != "" {
+				reality["short_id"] = shortID
+			}
+			tls["reality"] = reality
+		} else {
+			if line.AllowInsecure {
+				tls["insecure"] = true
+			}
+			if line.VLESSClientFingerprint != "" {
+				tls["utls"] = map[string]interface{}{
+					"enabled":     true,
+					"fingerprint": line.VLESSClientFingerprint,
+				}
+			}
+		}
+		ob := map[string]interface{}{
+			"type":        "vless",
+			"tag":         "proxy-" + line.ID,
+			"server":      line.VLESSServer,
+			"server_port": line.VLESSPort,
+			"uuid":        line.VLESSUUID,
+			"tls":         tls,
+		}
+		if line.VLESSFlow != "" {
+			ob["flow"] = line.VLESSFlow
+		}
+		if line.VLESSPacketEncoding != "" {
+			ob["packet_encoding"] = line.VLESSPacketEncoding
+		}
+		if line.TFO {
+			ob["tcp_fast_open"] = true
+		}
+		// VLESS 原生通过 XUDP / packetaddr 承载 UDP，不附带通用 udp_over_tcp 字段。
 		return ob
 	case LineTypeAnyTLS:
 		// AnyTLS 会在握手期间读取已经建立连接的远端地址，而 TCP Fast Open

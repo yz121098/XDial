@@ -2993,6 +2993,12 @@ final class AppState: ObservableObject {
             normalized.lines[i].ssMethod = normalized.lines[i].ssMethod.normalizedASCII()
             normalized.lines[i].vmessServer = normalized.lines[i].vmessServer.normalizedASCII()
             normalized.lines[i].vmessUUID = normalized.lines[i].vmessUUID.normalizedASCII()
+            normalized.lines[i].vlessServer = normalized.lines[i].vlessServer.normalizedASCII()
+            normalized.lines[i].vlessUUID = normalized.lines[i].vlessUUID.normalizedASCII()
+            normalized.lines[i].vlessFlow = normalized.lines[i].vlessFlow.normalizedASCII()
+            normalized.lines[i].vlessSNI = normalized.lines[i].vlessSNI.normalizedASCII()
+            normalized.lines[i].vlessRealityPublicKey = normalized.lines[i].vlessRealityPublicKey.normalizedASCII()
+            normalized.lines[i].vlessRealityShortID = normalized.lines[i].vlessRealityShortID.normalizedASCII()
             normalized.lines[i].anytlsServer = normalized.lines[i].anytlsServer.normalizedASCII()
             normalized.lines[i].anytlsSNI = normalized.lines[i].anytlsSNI.normalizedASCII()
         }

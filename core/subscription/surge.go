@@ -227,6 +227,86 @@ func surgeLineToLine(line string) (config.Line, bool) {
 		base.UDP = kvs["udp-relay"] == "true"
 		return base, true
 
+	case "vless":
+		if ws, hasWS := surgeOptionalBool(kvs, "ws"); !hasWS || ws {
+			return config.Line{}, false
+		}
+		publicKey := strings.TrimSpace(kvs["public-key"])
+		if publicKey == "" {
+			publicKey = strings.TrimSpace(kvs["pbk"])
+		}
+		shortIDVal := strings.TrimSpace(kvs["short-id"])
+		if shortIDVal == "" {
+			shortIDVal = strings.TrimSpace(kvs["sid"])
+		}
+		tlsEnabled, ok := surgeOptionalBool(kvs, "tls")
+		if !ok {
+			return config.Line{}, false
+		}
+		if _, hasTLS := kvs["tls"]; hasTLS && !tlsEnabled && publicKey == "" {
+			return config.Line{}, false
+		}
+		if _, hasTLS := kvs["tls"]; !hasTLS && publicKey == "" {
+			return config.Line{}, false
+		}
+		sni := strings.TrimSpace(kvs["sni"])
+		if sni == "" {
+			sni = strings.TrimSpace(kvs["server-name"])
+		}
+		if sni == "" {
+			sni = strings.TrimSpace(kvs["servername"])
+		}
+		if publicKey == "" && sni == "" {
+			sni = server
+		}
+		fingerprint := normalizeAnyTLSFingerprint(kvs["client-fingerprint"])
+		if publicKey != "" && fingerprint == "" {
+			fingerprint = "chrome"
+		}
+		rawALPN, valid := splitAnyTLSALPN(kvs["alpn"])
+		if !valid {
+			return config.Line{}, false
+		}
+		uuidVal := strings.TrimSpace(kvs["username"])
+		if uuidVal == "" {
+			uuidVal = strings.TrimSpace(kvs["uuid"])
+		}
+
+		base.Type = config.LineTypeVLESS
+		base.VLESSServer = server
+		base.VLESSPort = portNum
+		base.VLESSUUID = uuidVal
+		base.VLESSFlow = strings.TrimSpace(kvs["flow"])
+		base.VLESSSNI = sni
+		base.VLESSClientFingerprint = fingerprint
+		base.VLESSALPN = normalizeAnyTLSALPN(rawALPN)
+		base.VLESSRealityPublicKey = publicKey
+		base.VLESSRealityShortID = shortIDVal
+		base.AllowInsecure, ok = surgeOptionalBool(kvs, "skip-cert-verify")
+		if !ok {
+			return config.Line{}, false
+		}
+		base.UDP = true
+		if _, hasUDP := kvs["udp-relay"]; hasUDP {
+			base.UDP, ok = surgeOptionalBool(kvs, "udp-relay")
+			if !ok {
+				return config.Line{}, false
+			}
+		} else if _, hasUDP := kvs["udp"]; hasUDP {
+			base.UDP, ok = surgeOptionalBool(kvs, "udp")
+			if !ok {
+				return config.Line{}, false
+			}
+		}
+		base.TFO, ok = surgeOptionalBool(kvs, "tfo")
+		if !ok {
+			return config.Line{}, false
+		}
+		if !config.LineHasUsableOutbound(&base) {
+			return config.Line{}, false
+		}
+		return base, true
+
 	case "anytls":
 		base.Type = config.LineTypeAnyTLS
 		base.AnyTLSServer = server

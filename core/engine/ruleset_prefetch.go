@@ -146,7 +146,7 @@ func ruleSetPrefetchTargets(profile *config.Profile, scenario *config.Scenario) 
 		line := profile.FindLine(binding.LineID)
 		if line != nil && line.Enabled {
 			switch line.Type {
-			case config.LineTypeTrojan, config.LineTypeShadowsocks, config.LineTypeVMess, config.LineTypeAnyTLS:
+			case config.LineTypeTrojan, config.LineTypeShadowsocks, config.LineTypeVMess, config.LineTypeVLESS, config.LineTypeAnyTLS:
 				continue
 			}
 		}

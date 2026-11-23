@@ -1657,7 +1657,8 @@ func shouldReplaceBlankSeedWithImportedProfile(content string) bool {
 }
 
 func (m *Manager) ImportProfileContent(name, content string) error {
-	name = strings.TrimSpace(name)
+	customName := strings.TrimSpace(name)
+	name = customName
 	if name == "" {
 		name = "导入配置"
 	}
@@ -1681,6 +1682,9 @@ func (m *Manager) ImportProfileContent(name, content string) error {
 		parsed, subErr := subscription.Parse("", content, "")
 		if subErr != nil {
 			return fmt.Errorf("无法解析配置（支持 XDial/sing-box JSON、Clash YAML、Surge 或节点链接）: %w", err)
+		}
+		if customName == "" && len(parsed.Lines) == 1 && strings.TrimSpace(parsed.Lines[0].Name) != "" {
+			name = strings.TrimSpace(parsed.Lines[0].Name)
 		}
 		subscription.ExpandRulesets(parsed)
 		sourceID, idErr := config.NewProfileSourceID()
@@ -1747,6 +1751,9 @@ func (m *Manager) ImportProfileContent(name, content string) error {
 
 func (m *Manager) ImportSubscriptionURL(name, rawURL string) error {
 	rawURL = strings.TrimSpace(rawURL)
+	if subscription.IsShareURI(rawURL) {
+		return m.ImportProfileContent(name, rawURL)
+	}
 	if err := libbox.ValidateProfileSourceURL(rawURL); err != nil {
 		return err
 	}
@@ -2031,6 +2038,35 @@ func (m *Manager) SaveLine(line config.Line) error {
 	}
 	m.emitUpdate()
 	return nil
+}
+
+func (m *Manager) ParseLineURIs(raw string) ([]config.Line, error) {
+	return subscription.ParseShareURIs(raw)
+}
+
+func (m *Manager) ImportLineURIs(raw string) ([]config.Line, error) {
+	parsed, err := subscription.ParseShareURIs(raw)
+	if err != nil {
+		return nil, err
+	}
+	var added []config.Line
+	m.mu.Lock()
+	mutErr := m.mutateRuntimeLocked(func(prof *config.Profile, editingSourceID string) error {
+		for _, item := range parsed {
+			item.ID = editingSourceID + "-line-" + randomHex(6)
+			item.IdentityProfileID = editingSourceID
+			item.Enabled = true
+			prof.Lines = append(prof.Lines, item)
+			added = append(added, item)
+		}
+		return nil
+	})
+	m.mu.Unlock()
+	if mutErr != nil {
+		return nil, mutErr
+	}
+	m.emitUpdate()
+	return added, nil
 }
 
 func (m *Manager) DeleteLine(lineID string) error {
@@ -2545,33 +2581,72 @@ func (m *Manager) CloudHostInspect(targetJSON string) (json.RawMessage, error) {
 	return unwrapCloudHostEnvelope(m.cloudHost.ConnectAndInspect(targetJSON))
 }
 
-func (m *Manager) CloudHostPlan(port int) (json.RawMessage, error) {
-	return unwrapCloudHostEnvelope(m.cloudHost.Plan(port))
+func (m *Manager) CloudHostPlan(optionsJSON string) (json.RawMessage, error) {
+	if strings.TrimSpace(optionsJSON) == "" {
+		optionsJSON = "{}"
+	}
+	return unwrapCloudHostEnvelope(m.cloudHost.PlanWithOptions(optionsJSON))
 }
 
-func (m *Manager) CloudHostDeployAndSave(port int, lineName string) (json.RawMessage, error) {
-	deployData, err := unwrapCloudHostEnvelope(m.cloudHost.Deploy(port, &cloudHostListenerAdapter{mgr: m}))
+func (m *Manager) CloudHostDeployAndSave(protocol string, port int, serverName, lineName string) (json.RawMessage, error) {
+	reqRaw, _ := json.Marshal(map[string]any{
+		"protocol":    protocol,
+		"port":        port,
+		"server_name": serverName,
+	})
+	deployData, err := unwrapCloudHostEnvelope(m.cloudHost.DeployWithOptions(string(reqRaw), &cloudHostListenerAdapter{mgr: m}))
 	if err != nil {
 		return nil, err
 	}
 	var deployed struct {
-		Server   string `json:"server"`
-		Port     int    `json:"port"`
-		Method   string `json:"method"`
-		Password string `json:"password"`
+		Protocol    string `json:"protocol"`
+		Server      string `json:"server"`
+		Port        int    `json:"port"`
+		Method      string `json:"method"`
+		Password    string `json:"password"`
+		UUID        string `json:"uuid"`
+		Flow        string `json:"flow"`
+		ServerName  string `json:"server_name"`
+		PublicKey   string `json:"public_key"`
+		ShortID     string `json:"short_id"`
+		Fingerprint string `json:"fingerprint"`
 	}
 	if err := json.Unmarshal(deployData, &deployed); err != nil {
 		return nil, err
 	}
 
-	candidateLine := config.Line{
-		Name:     strings.TrimSpace(lineName),
-		Type:     config.LineTypeShadowsocks,
-		Enabled:  true,
-		SSServer: deployed.Server,
-		SSPort:   deployed.Port,
-		SSMethod: deployed.Method,
-		SSPass:   deployed.Password,
+	var candidateLine config.Line
+	firewallHint := "TCP/UDP"
+	if deployed.Protocol == "vless-reality" {
+		firewallHint = "TCP"
+		fp := deployed.Fingerprint
+		if fp == "" {
+			fp = "chrome"
+		}
+		candidateLine = config.Line{
+			Name:                   strings.TrimSpace(lineName),
+			Type:                   config.LineTypeVLESS,
+			Enabled:                true,
+			VLESSServer:            deployed.Server,
+			VLESSPort:              deployed.Port,
+			VLESSUUID:              deployed.UUID,
+			VLESSFlow:              deployed.Flow,
+			VLESSSNI:               deployed.ServerName,
+			VLESSClientFingerprint: fp,
+			VLESSRealityPublicKey:  deployed.PublicKey,
+			VLESSRealityShortID:    deployed.ShortID,
+			UDP:                    true,
+		}
+	} else {
+		candidateLine = config.Line{
+			Name:     strings.TrimSpace(lineName),
+			Type:     config.LineTypeShadowsocks,
+			Enabled:  true,
+			SSServer: deployed.Server,
+			SSPort:   deployed.Port,
+			SSMethod: deployed.Method,
+			SSPass:   deployed.Password,
+		}
 	}
 	if candidateLine.Name == "" {
 		candidateLine.Name = "云主机 " + deployed.Server
@@ -2580,7 +2655,7 @@ func (m *Manager) CloudHostDeployAndSave(port int, lineName string) (json.RawMes
 	lineRaw, _ := json.Marshal(candidateLine)
 	probeRes, err := unwrapCloudHostEnvelope(libbox.ProbeStandaloneLineThroughput(string(lineRaw), 15000))
 	if err != nil {
-		return nil, fmt.Errorf("部署完成但连通验证未通过（请检查云厂商安全组是否放行 TCP/UDP %d 端口）: %w", deployed.Port, err)
+		return nil, fmt.Errorf("部署完成但连通验证未通过（请检查云厂商安全组是否放行 %s %d 端口）: %w", firewallHint, deployed.Port, err)
 	}
 
 	if err := m.SaveLine(candidateLine); err != nil {

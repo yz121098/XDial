@@ -9,6 +9,9 @@ import {
   Square,
   Server,
   Lock,
+  Link2,
+  ClipboardPaste,
+  X,
 } from "lucide-react";
 import { rpc } from "../../api/bridge";
 import type { AppSnapshot, Line, LineType } from "../../types";
@@ -47,6 +50,10 @@ export const LinesTab: React.FC<{
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [showsAddMenu, setShowsAddMenu] = useState(false);
+  const [showsLinkModal, setShowsLinkModal] = useState(false);
+  const [linkInput, setLinkInput] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkErr, setLinkErr] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
   const isConnected = snap.phase === "connected";
@@ -80,6 +87,11 @@ export const LinesTab: React.FC<{
       base.trojan_port = 443;
     } else if (type === "vmess") {
       base.vmess_port = 443;
+    } else if (type === "vless") {
+      base.vless_port = 443;
+      base.vless_flow = "xtls-rprx-vision";
+      base.vless_client_fingerprint = "chrome";
+      base.udp = true;
     } else if (type === "anytls") {
       base.anytls_port = 443;
       base.anytls_client_fingerprint = "chrome";
@@ -332,9 +344,36 @@ export const LinesTab: React.FC<{
               gap: 2,
             }}
           >
+            <button
+              onClick={() => {
+                setShowsAddMenu(false);
+                setLinkErr(null);
+                setLinkInput("");
+                setShowsLinkModal(true);
+              }}
+              style={{
+                border: "none",
+                background: "transparent",
+                padding: "6px 10px",
+                borderRadius: 6,
+                textAlign: "left",
+                fontSize: 12,
+                color: "var(--accent)",
+                fontWeight: 600,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                cursor: "pointer",
+              }}
+            >
+              <Link2 size={13} />
+              <span>{en ? "Import Share Link (vless://)…" : "从分享链接导入…"}</span>
+            </button>
+            <div className="xd-divider" style={{ margin: "3px 0" }} />
             {(
               [
                 ["vpn", "Cisco AnyConnect"],
+                ["vless", "VLESS + Reality"],
                 ["anytls", "AnyTLS"],
                 ["trojan", "Trojan"],
                 ["shadowsocks", "Shadowsocks"],
@@ -386,6 +425,122 @@ export const LinesTab: React.FC<{
           </div>
         )}
       </div>
+
+      {showsLinkModal && (
+        <div
+          onClick={() => setShowsLinkModal(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 110,
+            background: "rgba(0, 0, 0, 0.36)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 450,
+              borderRadius: 14,
+              background: "var(--elevated)",
+              border: "0.75px solid rgba(var(--divider-rgb), 0.65)",
+              boxShadow: "var(--popover-shadow)",
+              padding: 18,
+              display: "flex",
+              flexDirection: "column",
+              gap: 11,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+                <Link2 size={15} color="var(--accent)" />
+                <span style={{ fontSize: 14.5, fontWeight: 700 }}>
+                  {en ? "Import Line from Share Link" : "从分享链接导入线路"}
+                </span>
+              </div>
+              <button
+                onClick={() => setShowsLinkModal(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--text-secondary)",
+                  cursor: "pointer",
+                }}
+              >
+                <X size={15} />
+              </button>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
+                {en
+                  ? "Supports vless:// (Reality / TLS), ss://, trojan://, vmess://, anytls:// (one per line or Base64)"
+                  : "支持 vless://（含 Reality）、ss://、trojan://、vmess://、anytls://（每行一条或 Base64）"}
+              </span>
+              <button
+                className="xd-capsule-btn"
+                style={{ height: 24 }}
+                onClick={async () => {
+                  try {
+                    const clip = await navigator.clipboard.readText();
+                    if (clip) setLinkInput(clip);
+                  } catch {
+                    // clipboard denied or empty
+                  }
+                }}
+              >
+                <ClipboardPaste size={12} />
+                <span>{en ? "Paste" : "粘贴剪贴板"}</span>
+              </button>
+            </div>
+
+            <textarea
+              className="xd-textarea tabular-mono"
+              rows={5}
+              autoFocus
+              placeholder="vless://uuid@host:port?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=...&sid=...#Name"
+              value={linkInput}
+              onChange={(e) => setLinkInput(e.target.value)}
+            />
+
+            {linkErr && (
+              <div className="selectable" style={{ fontSize: 11.5, color: "var(--danger)" }}>
+                {linkErr}
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button className="xd-capsule-btn" onClick={() => setShowsLinkModal(false)}>
+                {en ? "Cancel" : "取消"}
+              </button>
+              <button
+                className="xd-capsule-btn primary"
+                disabled={linkBusy || !linkInput.trim()}
+                onClick={async () => {
+                  setLinkBusy(true);
+                  setLinkErr(null);
+                  try {
+                    const created = await rpc<Line[]>("importLineURIs", { content: linkInput });
+                    if (created && created.length === 1) {
+                      setExpanded((prev) => ({ ...prev, [created[0].id]: true }));
+                    }
+                    setShowsLinkModal(false);
+                  } catch (e) {
+                    setLinkErr(e instanceof Error ? e.message : String(e));
+                  } finally {
+                    setLinkBusy(false);
+                  }
+                }}
+              >
+                {linkBusy ? (en ? "Importing…" : "正在导入…") : en ? "Import Line" : "导入线路"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -400,6 +555,8 @@ function summarizeLineEndpoint(l: Line): string {
       return l.ss_server ? `${l.ss_server}:${l.ss_port || ""}` : "";
     case "vmess":
       return l.vmess_server ? `${l.vmess_server}:${l.vmess_port || 443}` : "";
+    case "vless":
+      return l.vless_server ? `${l.vless_server}:${l.vless_port || 443}` : "";
     case "anytls":
       return l.anytls_server ? `${l.anytls_server}:${l.anytls_port || 443}` : "";
     case "tailscale":
@@ -632,6 +789,131 @@ const LineEditorForm: React.FC<{
                   </option>
                 ))}
               </select>
+            </Field>
+          </div>
+        </>
+      )}
+
+      {draft.type === "vless" && (
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button
+              className="xd-capsule-btn"
+              style={{ height: 23, fontSize: 11 }}
+              onClick={async () => {
+                try {
+                  const clip = await navigator.clipboard.readText();
+                  if (!clip.trim()) return;
+                  const parsed = await rpc<Line[]>("parseLineURIs", { content: clip });
+                  if (parsed && parsed.length > 0 && parsed[0].type === "vless") {
+                    const p = parsed[0];
+                    commit({
+                      name: p.name || draft.name,
+                      vless_server: p.vless_server,
+                      vless_port: p.vless_port,
+                      vless_uuid: p.vless_uuid,
+                      vless_flow: p.vless_flow,
+                      vless_sni: p.vless_sni,
+                      vless_client_fingerprint: p.vless_client_fingerprint,
+                      vless_alpn: p.vless_alpn,
+                      vless_reality_public_key: p.vless_reality_public_key,
+                      vless_reality_short_id: p.vless_reality_short_id,
+                      vless_packet_encoding: p.vless_packet_encoding,
+                      udp: p.udp,
+                      tfo: p.tfo,
+                      allow_insecure: p.allow_insecure,
+                    });
+                  }
+                } catch {
+                  // ignore invalid clipboard
+                }
+              }}
+            >
+              <ClipboardPaste size={11.5} />
+              <span>{en ? "Fill from Clipboard vless://" : "从剪贴板 vless:// 链接填充"}</span>
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 100px 1fr", gap: 8 }}>
+            <Field label={en ? "Server" : "服务器地址"}>
+              <input
+                className="xd-input tabular-mono"
+                value={draft.vless_server || ""}
+                onChange={(e) => setDraft({ ...draft, vless_server: e.target.value })}
+                onBlur={() => commit()}
+              />
+            </Field>
+            <Field label={en ? "Port" : "端口"}>
+              <input
+                className="xd-input tabular-mono"
+                type="number"
+                value={draft.vless_port || 443}
+                onChange={(e) => setDraft({ ...draft, vless_port: Number(e.target.value) })}
+                onBlur={() => commit()}
+              />
+            </Field>
+            <Field label="UUID">
+              <input
+                className="xd-input tabular-mono"
+                type="password"
+                placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                value={draft.vless_uuid || ""}
+                onChange={(e) => setDraft({ ...draft, vless_uuid: e.target.value })}
+                onBlur={() => commit()}
+              />
+            </Field>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+            <Field label={en ? "SNI / Camouflage Domain" : "SNI（Reality 伪装域名）"}>
+              <input
+                className="xd-input tabular-mono"
+                placeholder="www.microsoft.com"
+                value={draft.vless_sni || ""}
+                onChange={(e) => setDraft({ ...draft, vless_sni: e.target.value })}
+                onBlur={() => commit()}
+              />
+            </Field>
+            <Field label="Flow">
+              <select
+                className="xd-select"
+                value={draft.vless_flow || ""}
+                onChange={(e) => commit({ vless_flow: e.target.value })}
+              >
+                <option value="xtls-rprx-vision">xtls-rprx-vision</option>
+                <option value="">{en ? "None (Standard)" : "无（标准流）"}</option>
+              </select>
+            </Field>
+            <Field label={en ? "uTLS Fingerprint" : "uTLS 浏览器指纹"}>
+              <select
+                className="xd-select"
+                value={draft.vless_client_fingerprint || "chrome"}
+                onChange={(e) => commit({ vless_client_fingerprint: e.target.value })}
+              >
+                {ANYTLS_FINGERPRINTS.map((fp) => (
+                  <option key={fp} value={fp}>
+                    {fp}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 8 }}>
+            <Field label={en ? "Reality Public Key (optional for plain TLS)" : "Reality 公钥（Public Key，普通 TLS 可留空）"}>
+              <input
+                className="xd-input tabular-mono"
+                placeholder={en ? "Base64URL X25519 public key" : "43 位 X25519 公钥"}
+                value={draft.vless_reality_public_key || ""}
+                onChange={(e) => setDraft({ ...draft, vless_reality_public_key: e.target.value })}
+                onBlur={() => commit()}
+              />
+            </Field>
+            <Field label={en ? "Reality Short ID" : "Reality Short ID"}>
+              <input
+                className="xd-input tabular-mono"
+                placeholder={en ? "0–16 hex chars" : "0–16 位十六进制"}
+                value={draft.vless_reality_short_id || ""}
+                onChange={(e) => setDraft({ ...draft, vless_reality_short_id: e.target.value })}
+                onBlur={() => commit()}
+              />
             </Field>
           </div>
         </>

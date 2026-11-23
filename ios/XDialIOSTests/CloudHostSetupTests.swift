@@ -60,6 +60,27 @@ final class CloudHostSetupTests: XCTestCase {
         XCTAssertEqual(line.ssPassword, "AAAAAAAAAAAAAAAAAAAAAA==")
         XCTAssertTrue(line.enabled)
         XCTAssertTrue(line.verified)
+
+        let realityDeployed = CloudHostSetupModel.previewDecode(CloudHostResult.self, """
+        {"protocol":"vless-reality","server":"203.0.113.10","port":443,"method":"vless-reality",
+         "uuid":"b831381d-6324-4d53-ad4f-8cda48b30811","flow":"xtls-rprx-vision",
+         "server_name":"www.microsoft.com","public_key":"cHVibGljLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmc",
+         "short_id":"0123456789abcdef","fingerprint":"chrome","reused":false}
+        """)
+        model.preview(stage: .verified(realityDeployed, measurement))
+        let realityDraft = try? XCTUnwrap(model.draft())
+        let realityLine = Line(cloudHost: realityDraft!)
+        XCTAssertEqual(realityLine.type, "vless")
+        XCTAssertEqual(realityLine.vlessServer, "203.0.113.10")
+        XCTAssertEqual(realityLine.vlessPort, 443)
+        XCTAssertEqual(realityLine.vlessUUID, "b831381d-6324-4d53-ad4f-8cda48b30811")
+        XCTAssertEqual(realityLine.vlessFlow, "xtls-rprx-vision")
+        XCTAssertEqual(realityLine.vlessSNI, "www.microsoft.com")
+        XCTAssertEqual(realityLine.vlessRealityPublicKey, "cHVibGljLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmc")
+        XCTAssertEqual(realityLine.vlessRealityShortID, "0123456789abcdef")
+        XCTAssertEqual(realityLine.vlessClientFingerprint, "chrome")
+        XCTAssertTrue(realityLine.udp)
+        XCTAssertTrue(realityLine.verified)
     }
 
     func testEditingThePortInvalidatesThePlan() async {

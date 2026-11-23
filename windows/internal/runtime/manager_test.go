@@ -368,3 +368,45 @@ func itoa(n int) string {
 	}
 	return string(buf[i:])
 }
+
+func TestImportVLESSShareURIAsLineAndAsProfile(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("store.New: %v", err)
+	}
+	mgr, err := NewManager(st, "v0.9.8-test", nil, nil)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer mgr.Shutdown()
+
+	uri := "vless://00000000-0000-4000-8000-000000000001@203.0.113.199:8443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.microsoft.com&fp=chrome&pbk=cHVibGljLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmc&sid=0123456789abcdef&spx=%2F238855bb94f7cf2&type=tcp&headerType=none#gcp-us%20Reality"
+
+	// 1. Import directly into current editing profile's Lines
+	added, err := mgr.ImportLineURIs(uri)
+	if err != nil {
+		t.Fatalf("ImportLineURIs: %v", err)
+	}
+	if len(added) != 1 || added[0].Name != "gcp-us Reality" || added[0].Type != config.LineTypeVLESS ||
+		added[0].VLESSServer != "203.0.113.199" || added[0].VLESSPort != 8443 ||
+		added[0].VLESSFlow != "xtls-rprx-vision" || added[0].VLESSSNI != "www.microsoft.com" ||
+		added[0].VLESSRealityPublicKey != "cHVibGljLWtleS10aGF0LWlzLTMyLWJ5dGVzLWxvbmc" ||
+		added[0].VLESSRealityShortID != "0123456789abcdef" {
+		t.Fatalf("unexpected imported VLESS line: %+v", added)
+	}
+
+	// 2. Pasting vless:// into Subscribe from URL also imports cleanly named after the node
+	if err := mgr.ImportSubscriptionURL("", uri); err != nil {
+		t.Fatalf("ImportSubscriptionURL(vless://): %v", err)
+	}
+	snap := mgr.GetSnapshot()
+	foundNamedSource := false
+	for _, src := range snap.Editor.Sources {
+		if src.Name == "gcp-us Reality" {
+			foundNamedSource = true
+		}
+	}
+	if !foundNamedSource {
+		t.Fatalf("expected profile source named 'gcp-us Reality', got: %+v", snap.Editor.Sources)
+	}
+}

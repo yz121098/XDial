@@ -2,15 +2,19 @@ package cloudhost
 
 import (
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // The sing-box project's APT signing key (Project S <contact@sagernet.org>,
@@ -21,7 +25,37 @@ import (
 //go:embed sagernet.asc
 var sagernetKey []byte
 
-const inboundTag = "xdial-ss"
+const (
+	inboundTag      = "xdial-ss"
+	vlessInboundTag = "xdial-vless"
+)
+
+// Options configures the proxy protocol, port and Reality camouflage domain.
+type Options struct {
+	Protocol   string `json:"protocol,omitempty"`
+	Port       int    `json:"port,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+}
+
+func normalizeOptions(opts Options) (Options, error) {
+	switch strings.ToLower(strings.TrimSpace(opts.Protocol)) {
+	case "", ProtocolShadowsocks:
+		opts.Protocol = ProtocolShadowsocks
+		opts.ServerName = ""
+	case ProtocolVLESSReality, "vless":
+		opts.Protocol = ProtocolVLESSReality
+		serverName, ok := validRealityServerName(opts.ServerName)
+		if !ok {
+			return Options{}, newError("invalid_server_name",
+				"请填写有效的伪装域名（如 www.microsoft.com），不能填写 IP 地址。",
+				"Enter a valid camouflage domain name (such as www.microsoft.com), not an IP address.")
+		}
+		opts.ServerName = serverName
+	default:
+		return Options{}, newError("unsupported_protocol", "不支持的代理协议："+opts.Protocol, "Unsupported proxy protocol: "+opts.Protocol)
+	}
+	return opts, nil
+}
 
 // Step is one planned change, shown to the user before anything happens.
 type Step struct {
@@ -33,24 +67,33 @@ type Step struct {
 
 // Plan is the exact set of changes setup will make.
 type Plan struct {
-	Port    int    `json:"port"`
-	Method  string `json:"method"`
-	Reuse   bool   `json:"reuse"`
-	Recover bool   `json:"recover"`
-	Steps   []Step `json:"steps"`
-	binary  string
-	install bool
-	source  string
-	ufw     bool
+	Protocol   string `json:"protocol,omitempty"`
+	Port       int    `json:"port"`
+	Method     string `json:"method,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	Reuse      bool   `json:"reuse"`
+	Recover    bool   `json:"recover"`
+	Steps      []Step `json:"steps"`
+	binary     string
+	install    bool
+	source     string
+	ufw        bool
 }
 
 // Result is what the client saves as a line.
 type Result struct {
-	Server   string `json:"server"`
-	Port     int    `json:"port"`
-	Method   string `json:"method"`
-	Password string `json:"password"`
-	Reused   bool   `json:"reused"`
+	Protocol    string `json:"protocol,omitempty"`
+	Server      string `json:"server"`
+	Port        int    `json:"port"`
+	Method      string `json:"method,omitempty"`
+	Password    string `json:"password,omitempty"`
+	UUID        string `json:"uuid,omitempty"`
+	Flow        string `json:"flow,omitempty"`
+	ServerName  string `json:"server_name,omitempty"`
+	PublicKey   string `json:"public_key,omitempty"`
+	ShortID     string `json:"short_id,omitempty"`
+	Fingerprint string `json:"fingerprint,omitempty"`
+	Reused      bool   `json:"reused"`
 }
 
 // Event reports progress; it never contains secrets.
@@ -62,26 +105,57 @@ type Event struct {
 
 // Plan returns the changes setup would make for the port (0 picks the suggested one).
 func (s *Session) Plan(port int) (Plan, error) {
+	return s.PlanWithOptions(Options{Protocol: ProtocolShadowsocks, Port: port})
+}
+
+// PlanWithOptions returns the changes setup would make for the chosen protocol and port.
+func (s *Session) PlanWithOptions(opts Options) (Plan, error) {
 	if s.report == nil {
 		return Plan{}, newError("not_inspected", "请先检查服务器", "Inspect the server first")
 	}
-	return BuildPlan(*s.report, s.facts, port)
+	return BuildPlanWithOptions(*s.report, s.facts, opts)
 }
 
 // BuildPlan turns the inspection into concrete changes for the chosen port.
 func BuildPlan(report Report, facts facts, port int) (Plan, error) {
+	return BuildPlanWithOptions(report, facts, Options{Protocol: ProtocolShadowsocks, Port: port})
+}
+
+// BuildPlanWithOptions turns the inspection into concrete changes for the chosen protocol, port and SNI.
+func BuildPlanWithOptions(report Report, facts facts, opts Options) (Plan, error) {
 	if len(report.Blocking) > 0 {
 		return Plan{}, newError("blocked", report.Blocking[0].Message, report.Blocking[0].English)
 	}
+	normalized, err := normalizeOptions(opts)
+	if err != nil {
+		return Plan{}, err
+	}
+	port := normalized.Port
 	if port == 0 {
 		port = report.SuggestedPort
 	}
-	if !report.PortAvailable(port) {
+	if !report.PortAvailableForProtocol(port, normalized.Protocol) {
+		if normalized.Protocol == ProtocolVLESSReality {
+			return Plan{}, newError("port_in_use",
+				"端口 "+strconv.Itoa(port)+" 已被占用或不可用，请换用空闲的 443 或 1024–65535 端口。",
+				"Port "+strconv.Itoa(port)+" is in use or not allowed; choose 443 (if free) or a free port between 1024 and 65535.")
+		}
 		return Plan{}, newError("port_in_use",
 			"端口 "+strconv.Itoa(port)+" 已被占用或不可用，请换一个 1024–65535 之间的空闲端口。",
 			"Port "+strconv.Itoa(port)+" is in use or not allowed; choose a free port between 1024 and 65535.")
 	}
-	plan := Plan{Port: port, Method: shadowsocksKey, binary: facts["singbox_path"], ufw: report.UFWActive}
+	plan := Plan{
+		Protocol:   normalized.Protocol,
+		Port:       port,
+		ServerName: normalized.ServerName,
+		binary:     facts["singbox_path"],
+		ufw:        report.UFWActive,
+	}
+	if normalized.Protocol == ProtocolShadowsocks {
+		plan.Method = shadowsocksKey
+	} else {
+		plan.Method = "vless-reality"
+	}
 	sources := strings.Fields(facts["sagernet_sources"])
 	if report.Interrupted {
 		// Undo the interrupted run first; whatever it created counts as absent.
@@ -101,14 +175,16 @@ func BuildPlan(report Report, facts facts, port int) (Plan, error) {
 			sources = kept
 		}
 	}
-	if existing := report.Existing; existing != nil && existing.Port == port {
+	if existing := report.Existing; existing != nil && existingMatchesOptions(existing, normalized, port) {
 		plan.Reuse = true
-		plan.Method = existing.Method
+		if existing.Method != "" {
+			plan.Method = existing.Method
+		}
 		if !existing.Active {
 			plan.Steps = append(plan.Steps, Step{ID: "start", Title: "重新启动已有的 XDial 代理服务", English: "Restart the existing XDial proxy service"})
 		}
 		if report.UFWActive {
-			plan.Steps = append(plan.Steps, ufwStep(port))
+			plan.Steps = append(plan.Steps, ufwStepForProtocol(port, normalized.Protocol))
 		}
 		return plan, nil
 	}
@@ -126,22 +202,74 @@ func BuildPlan(report Report, facts facts, port int) (Plan, error) {
 		plan.Steps = append(plan.Steps, Step{ID: "install", Title: "用 apt 安装 sing-box（校验软件包签名）", English: "Install sing-box with apt (package signatures verified)", Detail: "apt-get install sing-box"})
 	}
 	if report.Existing != nil {
-		plan.Steps = append(plan.Steps, Step{ID: "config", Title: "把已有的 XDial 代理改到端口 " + strconv.Itoa(port) + "，并换一个新密钥", English: "Move the existing XDial proxy to port " + strconv.Itoa(port) + " with a new key", Detail: configPath})
+		if normalized.Protocol == ProtocolVLESSReality {
+			plan.Steps = append(plan.Steps, Step{
+				ID:      "config",
+				Title:   "把已有的 XDial 代理更新为 VLESS + Reality（端口 " + strconv.Itoa(port) + "，伪装域名 " + normalized.ServerName + "，新生成密钥）",
+				English: "Update the existing XDial proxy to VLESS + Reality on port " + strconv.Itoa(port) + " (SNI " + normalized.ServerName + ") with fresh keys",
+				Detail:  configPath,
+			})
+		} else {
+			plan.Steps = append(plan.Steps, Step{ID: "config", Title: "把已有的 XDial 代理改到端口 " + strconv.Itoa(port) + "，并换一个新密钥", English: "Move the existing XDial proxy to port " + strconv.Itoa(port) + " with a new key", Detail: configPath})
+		}
 	} else {
-		plan.Steps = append(plan.Steps,
-			Step{ID: "config", Title: "写入代理配置：Shadowsocks 2022，端口 " + strconv.Itoa(port) + "，新生成的密钥", English: "Write the proxy configuration: Shadowsocks 2022 on port " + strconv.Itoa(port) + " with a new key", Detail: configPath},
-			Step{ID: "unit", Title: "添加独立的系统服务 xdial-proxy", English: "Add a separate system service, xdial-proxy", Detail: unitPath},
-		)
+		if normalized.Protocol == ProtocolVLESSReality {
+			plan.Steps = append(plan.Steps,
+				Step{
+					ID:      "config",
+					Title:   "写入代理配置：VLESS + Reality（Vision），端口 " + strconv.Itoa(port) + "，伪装域名 " + normalized.ServerName + "，新生成 X25519 密钥与 UUID",
+					English: "Write the proxy configuration: VLESS + Reality (Vision) on port " + strconv.Itoa(port) + ", SNI " + normalized.ServerName + ", with fresh X25519 keys and UUID",
+					Detail:  configPath,
+				},
+				Step{ID: "unit", Title: "添加独立的系统服务 xdial-proxy", English: "Add a separate system service, xdial-proxy", Detail: unitPath},
+			)
+		} else {
+			plan.Steps = append(plan.Steps,
+				Step{ID: "config", Title: "写入代理配置：Shadowsocks 2022，端口 " + strconv.Itoa(port) + "，新生成的密钥", English: "Write the proxy configuration: Shadowsocks 2022 on port " + strconv.Itoa(port) + " with a new key", Detail: configPath},
+				Step{ID: "unit", Title: "添加独立的系统服务 xdial-proxy", English: "Add a separate system service, xdial-proxy", Detail: unitPath},
+			)
+		}
 	}
 	if report.UFWActive {
-		plan.Steps = append(plan.Steps, ufwStep(port))
+		plan.Steps = append(plan.Steps, ufwStepForProtocol(port, normalized.Protocol))
 	}
 	plan.Steps = append(plan.Steps, Step{ID: "start", Title: "启动服务并确认它在端口 " + strconv.Itoa(port) + " 上监听", English: "Start the service and confirm it listens on port " + strconv.Itoa(port)})
 	return plan, nil
 }
 
+func existingMatchesOptions(existing *Existing, opts Options, port int) bool {
+	if existing == nil || existing.Port != port {
+		return false
+	}
+	existingProto := existing.Protocol
+	if existingProto == "" {
+		existingProto = ProtocolShadowsocks
+	}
+	if existingProto != opts.Protocol {
+		return false
+	}
+	if opts.Protocol == ProtocolVLESSReality {
+		return strings.EqualFold(existing.ServerName, opts.ServerName)
+	}
+	return true
+}
+
+func ufwProtocols(protocol string) []string {
+	if protocol == ProtocolVLESSReality {
+		return []string{"tcp"}
+	}
+	return []string{"tcp", "udp"}
+}
+
 func ufwStep(port int) Step {
+	return ufwStepForProtocol(port, ProtocolShadowsocks)
+}
+
+func ufwStepForProtocol(port int, protocol string) Step {
 	p := strconv.Itoa(port)
+	if protocol == ProtocolVLESSReality {
+		return Step{ID: "ufw", Title: "在 ufw 里只放行端口 " + p + "（TCP）", English: "Allow only port " + p + " (TCP) in ufw", Detail: "ufw allow " + p + "/tcp"}
+	}
 	return Step{ID: "ufw", Title: "在 ufw 里只放行端口 " + p + "（TCP 和 UDP）", English: "Allow only port " + p + " (TCP and UDP) in ufw", Detail: "ufw allow " + p + "/tcp, " + p + "/udp"}
 }
 
@@ -180,6 +308,11 @@ type undo struct {
 
 // Deploy applies the plan. Any failure or cancellation rolls back what this run did.
 func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (Result, error) {
+	return s.DeployWithOptions(ctx, Options{Protocol: ProtocolShadowsocks, Port: port}, progress)
+}
+
+// DeployWithOptions applies the plan for the chosen protocol, port and Reality SNI.
+func (s *Session) DeployWithOptions(ctx context.Context, opts Options, progress func(Event)) (Result, error) {
 	if progress == nil {
 		progress = func(Event) {}
 	}
@@ -187,7 +320,7 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 		return Result{}, newError("not_inspected", "请先检查服务器", "Inspect the server first")
 	}
 	report, facts := *s.report, s.facts
-	plan, err := BuildPlan(report, facts, port)
+	plan, err := BuildPlanWithOptions(report, facts, opts)
 	if err != nil {
 		return Result{}, err
 	}
@@ -201,18 +334,43 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 			return Result{}, err
 		}
 		facts = s.facts
-		if plan, err = BuildPlan(report, facts, port); err != nil {
+		if plan, err = BuildPlanWithOptions(report, facts, opts); err != nil {
 			return Result{}, err
 		}
 		progress(Event{Step: "recover", Status: "done"})
 	}
 
-	password, err := newShadowsocksKey()
-	if err != nil {
-		return Result{}, newError("random_failed", "无法生成密钥", "Could not generate a key")
-	}
-	if plan.Reuse {
-		password = report.Existing.Password
+	var (
+		password   string
+		userUUID   string
+		flow       string
+		privateKey string
+		publicKey  string
+		shortID    string
+	)
+	if plan.Protocol == ProtocolVLESSReality {
+		if plan.Reuse {
+			userUUID = report.Existing.UUID
+			flow = report.Existing.Flow
+			privateKey = report.Existing.PrivateKey
+			publicKey = report.Existing.PublicKey
+			shortID = report.Existing.ShortID
+		} else {
+			var genErr error
+			userUUID, privateKey, publicKey, shortID, genErr = newVLESSRealityMaterial()
+			if genErr != nil {
+				return Result{}, newError("random_failed", "无法生成密钥", "Could not generate a key")
+			}
+			flow = vlessVisionFlow
+		}
+	} else {
+		password, err = newShadowsocksKey()
+		if err != nil {
+			return Result{}, newError("random_failed", "无法生成密钥", "Could not generate a key")
+		}
+		if plan.Reuse {
+			password = report.Existing.Password
+		}
 	}
 	var undos []undo
 	previous := previousState(facts)
@@ -282,6 +440,16 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 		return fail("prepare", err)
 	}
 
+	allowedProtos := ufwProtocols(plan.Protocol)
+	keepRule := func(rule string) bool {
+		for _, proto := range allowedProtos {
+			if rule == strconv.Itoa(plan.Port)+"/"+proto {
+				return true
+			}
+		}
+		return false
+	}
+
 	for _, planned := range plan.Steps {
 		var err error
 		switch planned.ID {
@@ -307,7 +475,13 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 			})
 			current.InstalledPackage = err == nil || previous.InstalledPackage
 		case "config":
-			config, buildErr := serverConfigJSON(plan.Port, password)
+			var config []byte
+			var buildErr error
+			if plan.Protocol == ProtocolVLESSReality {
+				config, buildErr = serverConfigVLESSRealityJSON(plan.Port, plan.ServerName, userUUID, privateKey, shortID)
+			} else {
+				config, buildErr = serverConfigJSON(plan.Port, password)
+			}
 			if buildErr != nil {
 				err = buildErr
 				break
@@ -338,7 +512,7 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 				return s.mustPrivileged(ctx, "systemctl daemon-reload && systemctl enable "+serviceName+" >/dev/null 2>&1", "无法启用新服务")
 			}, func(c context.Context) error { return s.undoResource(c, "unit", current) })
 		case "ufw":
-			for _, proto := range []string{"tcp", "udp"} {
+			for _, proto := range allowedProtos {
 				rule := strconv.Itoa(plan.Port) + "/" + proto
 				var exists bool
 				exists, err = s.hasUFWRule(ctx, rule)
@@ -374,7 +548,7 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 	// an administrator can reuse that port without a later run deleting its rule.
 	committed.OwnedUFW = nil
 	for _, rule := range current.OwnedUFW {
-		if strings.HasPrefix(rule, strconv.Itoa(plan.Port)+"/") {
+		if keepRule(rule) {
 			committed.OwnedUFW = append(committed.OwnedUFW, rule)
 		}
 	}
@@ -385,13 +559,36 @@ func (s *Session) Deploy(ctx context.Context, port int, progress func(Event)) (R
 		return fail("commit", err)
 	}
 	for _, rule := range previous.OwnedUFW {
-		if !strings.HasPrefix(rule, strconv.Itoa(plan.Port)+"/") {
+		if !keepRule(rule) {
 			// Cleanup follows commit so a failed deployment never loses its old access.
 			_ = s.undoResource(ctx, "ufw_rule:"+rule, previous)
 		}
 	}
 	_, _ = s.runPrivileged(ctx, "rm -f "+configPath+".previous", nil)
-	return Result{Server: strings.Trim(strings.TrimSpace(s.target.Host), "[]"), Port: plan.Port, Method: plan.Method, Password: password, Reused: plan.Reuse}, nil
+	serverHost := strings.Trim(strings.TrimSpace(s.target.Host), "[]")
+	if plan.Protocol == ProtocolVLESSReality {
+		return Result{
+			Protocol:    ProtocolVLESSReality,
+			Server:      serverHost,
+			Port:        plan.Port,
+			Method:      plan.Method,
+			UUID:        userUUID,
+			Flow:        flow,
+			ServerName:  plan.ServerName,
+			PublicKey:   publicKey,
+			ShortID:     shortID,
+			Fingerprint: vlessDefaultFingerprint,
+			Reused:      plan.Reuse,
+		}, nil
+	}
+	return Result{
+		Protocol: ProtocolShadowsocks,
+		Server:   serverHost,
+		Port:     plan.Port,
+		Method:   plan.Method,
+		Password: password,
+		Reused:   plan.Reuse,
+	}, nil
 }
 
 // rollback undoes this run in reverse order and reports whether every step
@@ -489,7 +686,7 @@ func (s *Session) undoResource(ctx context.Context, resource string, st state) e
 			return incompleteUndo()
 		}
 		port, err := strconv.Atoi(parts[0])
-		if err != nil || port < 1024 || port > 65535 {
+		if err != nil || (port != 443 && (port < 1024 || port > 65535)) {
 			return incompleteUndo()
 		}
 		exists, err := s.hasUFWRule(ctx, rule)
@@ -673,9 +870,41 @@ func serverConfigJSON(port int, password string) ([]byte, error) {
 	return json.MarshalIndent(document, "", "  ")
 }
 
+func serverConfigVLESSRealityJSON(port int, serverName, userUUID, privateKey, shortID string) ([]byte, error) {
+	document := map[string]interface{}{
+		"log": map[string]interface{}{"level": "warn"},
+		"inbounds": []interface{}{map[string]interface{}{
+			"type":        "vless",
+			"tag":         vlessInboundTag,
+			"listen":      "::",
+			"listen_port": port,
+			"users": []interface{}{map[string]interface{}{
+				"name": "xdial",
+				"uuid": userUUID,
+				"flow": vlessVisionFlow,
+			}},
+			"tls": map[string]interface{}{
+				"enabled":     true,
+				"server_name": serverName,
+				"reality": map[string]interface{}{
+					"enabled": true,
+					"handshake": map[string]interface{}{
+						"server":      serverName,
+						"server_port": 443,
+					},
+					"private_key": privateKey,
+					"short_id":    []string{shortID},
+				},
+			},
+		}},
+		"outbounds": []interface{}{map[string]interface{}{"type": "direct", "tag": "direct"}},
+	}
+	return json.MarshalIndent(document, "", "  ")
+}
+
 func unitFile(binary string) string {
 	return fmt.Sprintf(`[Unit]
-Description=XDial proxy (sing-box Shadowsocks 2022), installed by XDial
+Description=XDial proxy (sing-box), installed by XDial
 After=network-online.target
 Wants=network-online.target
 
@@ -701,4 +930,25 @@ func newShadowsocksKey() (string, error) {
 		return "", err
 	}
 	return base64.StdEncoding.EncodeToString(key), nil
+}
+
+// newVLESSRealityMaterial generates a UUIDv4, an X25519 Reality keypair and an 8-byte hex short_id.
+func newVLESSRealityMaterial() (userUUID, privateKey, publicKey, shortID string, err error) {
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", "", "", "", err
+	}
+	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return "", "", "", "", err
+	}
+	sidBytes := make([]byte, 8)
+	if _, err := rand.Read(sidBytes); err != nil {
+		return "", "", "", "", err
+	}
+	return id.String(),
+		base64.RawURLEncoding.EncodeToString(priv.Bytes()),
+		base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+		hex.EncodeToString(sidBytes),
+		nil
 }

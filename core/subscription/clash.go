@@ -147,6 +147,85 @@ func clashProxyToLine(p map[string]interface{}) (config.Line, bool) {
 		base.AllowInsecure = getBool(p, "skip-cert-verify")
 		return base, true
 
+	case "vless":
+		if netType := strings.ToLower(strings.TrimSpace(getString(p, "network"))); netType != "" && netType != "tcp" {
+			return config.Line{}, false
+		}
+		var realityPublicKey, realityShortID string
+		if ro, hasRO := p["reality-opts"].(map[string]interface{}); hasRO {
+			realityPublicKey = strings.TrimSpace(getString(ro, "public-key"))
+			realityShortID = strings.TrimSpace(getString(ro, "short-id"))
+		}
+		tlsEnabled, tlsOK := clashOptionalBool(p, "tls")
+		if !tlsOK {
+			return config.Line{}, false
+		}
+		if _, hasTLS := p["tls"]; hasTLS && !tlsEnabled && realityPublicKey == "" {
+			return config.Line{}, false
+		}
+		if _, hasTLS := p["tls"]; !hasTLS && realityPublicKey == "" {
+			return config.Line{}, false
+		}
+		sni := strings.TrimSpace(getString(p, "servername"))
+		if sni == "" {
+			sni = strings.TrimSpace(getString(p, "sni"))
+		}
+		if realityPublicKey == "" && sni == "" {
+			sni = server
+		}
+		fpRaw := getString(p, "client-fingerprint")
+		if fpRaw == "" {
+			fpRaw = getString(p, "fingerprint")
+		}
+		fingerprint := normalizeAnyTLSFingerprint(fpRaw)
+		if realityPublicKey != "" && fingerprint == "" {
+			fingerprint = "chrome"
+		}
+		alpn, ok := clashAnyTLSALPN(p)
+		if !ok {
+			return config.Line{}, false
+		}
+		packetEncoding := strings.ToLower(strings.TrimSpace(getString(p, "packet-encoding")))
+		if packetEncoding == "" && getBool(p, "packet-addr") {
+			packetEncoding = "packetaddr"
+		}
+
+		base.Type = config.LineTypeVLESS
+		base.VLESSServer = server
+		base.VLESSPort = port
+		base.VLESSUUID = strings.TrimSpace(getString(p, "uuid"))
+		base.VLESSFlow = strings.TrimSpace(getString(p, "flow"))
+		base.VLESSSNI = sni
+		base.VLESSClientFingerprint = fingerprint
+		base.VLESSALPN = alpn
+		base.VLESSRealityPublicKey = realityPublicKey
+		base.VLESSRealityShortID = realityShortID
+		base.VLESSPacketEncoding = packetEncoding
+		base.AllowInsecure, ok = clashOptionalBool(p, "skip-cert-verify")
+		if !ok {
+			return config.Line{}, false
+		}
+		base.UDP = true
+		if _, hasUDP := p["udp"]; hasUDP {
+			base.UDP, ok = clashOptionalBool(p, "udp")
+			if !ok {
+				return config.Line{}, false
+			}
+		} else if _, hasUDPRelay := p["udp-relay"]; hasUDPRelay {
+			base.UDP, ok = clashOptionalBool(p, "udp-relay")
+			if !ok {
+				return config.Line{}, false
+			}
+		}
+		base.TFO, ok = clashOptionalBool(p, "tfo")
+		if !ok {
+			return config.Line{}, false
+		}
+		if !config.LineHasUsableOutbound(&base) {
+			return config.Line{}, false
+		}
+		return base, true
+
 	case "anytls":
 		base.Type = config.LineTypeAnyTLS
 		base.AnyTLSServer = server

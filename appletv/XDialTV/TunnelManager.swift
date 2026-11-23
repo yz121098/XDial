@@ -214,7 +214,7 @@ struct TunnelAcceptancePlan: Codable, Sendable, Equatable {
             case "direct": return "direct"
             case "vpn": return "vpn"
             case "tailscale": return "tailscale-" + line.id
-            case "trojan", "shadowsocks", "ss", "vmess", "anytls", "selector", "urltest": return "proxy-" + line.id
+            case "trojan", "shadowsocks", "ss", "vmess", "vless", "anytls", "selector", "urltest": return "proxy-" + line.id
             default: return nil
             }
         }

@@ -4,7 +4,7 @@ import Foundation
 enum DebugStateRedactor {
     static let secretKeys: Set<String> = [
         "vpn_password", "trojan_password", "ss_password", "vmess_uuid",
-        "anytls_password",
+        "vless_uuid", "anytls_password",
         "tailscale_auth_key", "auth_key",
         "geoip_rule_set_url_template",
     ]

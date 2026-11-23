@@ -78,6 +78,7 @@ enum ExistingXDialProfileReader {
             if let value = vault[id + "-trojan"] { profile.lines[index].trojanPassword = value }
             if let value = vault[id + "-ss"] { profile.lines[index].ssPassword = value }
             if let value = vault[id + "-vmess"] { profile.lines[index].vmessUUID = value }
+            if let value = vault[id + "-vless"] { profile.lines[index].vlessUUID = value }
             if let value = vault[id + "-anytls"] { profile.lines[index].anytlsPassword = value }
             // A connection that succeeded in the old app does not verify the converted line.
             profile.lines[index].verified = profile.lines[index].type == "direct"

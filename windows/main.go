@@ -469,6 +469,24 @@ func (b *uiBridge) dispatchRPC(method string, params json.RawMessage) (any, erro
 		}
 		return nil, b.mgr.DeleteLine(p.ID)
 
+	case "parseLineURIs":
+		var p struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return b.mgr.ParseLineURIs(p.Content)
+
+	case "importLineURIs":
+		var p struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		return b.mgr.ImportLineURIs(p.Content)
+
 	case "reorderLines":
 		var p struct {
 			IDs []string `json:"ids"`
@@ -573,20 +591,18 @@ func (b *uiBridge) dispatchRPC(method string, params json.RawMessage) (any, erro
 	case "cloudHostInspect":
 		return b.mgr.CloudHostInspect(string(params))
 	case "cloudHostPlan":
-		var p struct {
-			Port int `json:"port"`
-		}
-		_ = json.Unmarshal(params, &p)
-		return b.mgr.CloudHostPlan(p.Port)
+		return b.mgr.CloudHostPlan(string(params))
 	case "cloudHostDeployAndSave":
 		var p struct {
-			Port int    `json:"port"`
-			Name string `json:"name"`
+			Protocol   string `json:"protocol"`
+			Port       int    `json:"port"`
+			ServerName string `json:"server_name"`
+			Name       string `json:"name"`
 		}
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, err
 		}
-		return b.mgr.CloudHostDeployAndSave(p.Port, p.Name)
+		return b.mgr.CloudHostDeployAndSave(p.Protocol, p.Port, p.ServerName, p.Name)
 	case "cloudHostCancel":
 		b.mgr.CloudHostCancel()
 		return nil, nil

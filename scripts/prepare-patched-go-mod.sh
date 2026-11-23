@@ -319,6 +319,12 @@ grep -Fq 'func TestXDialOriginalUDPExchangePreservesWireRequestAndTarget(' \
 	"${patched_sing_box_dir}/dns/transport/local/local_darwin_test.go"
 grep -Fq 'options.DisableCache = true' \
 	"${patched_sing_box_dir}/dns/client.go"
+! grep -Fq 'X25519MLKEM768' \
+	"${patched_sing_box_dir}/common/tls/reality_client.go"
+grep -Fq 'ecdheKey = keyShareKeys.MlkemEcdhe' \
+	"${patched_sing_box_dir}/common/tls/reality_client.go"
+grep -Fq 'func TestXDialRealityClientPreservesMLKEM768AndVerifiesBothCamouflageCurves(' \
+	"${patched_sing_box_dir}/common/tls/reality_xdial_test.go"
 
 patched_module_dir="${staging_dir}/tailscale"
 cp -R "${source_dir}" "${patched_module_dir}"

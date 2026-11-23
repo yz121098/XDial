@@ -1,0 +1,222 @@
+--- a/common/tls/reality_client.go
++++ b/common/tls/reality_client.go
+@@ -30,7 +30,6 @@
+ 	"github.com/sagernet/sing-box/adapter"
+ 	C "github.com/sagernet/sing-box/constant"
+ 	"github.com/sagernet/sing-box/option"
+-	"github.com/sagernet/sing/common"
+ 	"github.com/sagernet/sing/common/debug"
+ 	E "github.com/sagernet/sing/common/exceptions"
+ 	"github.com/sagernet/sing/common/logger"
+@@ -145,30 +144,18 @@
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	for _, extension := range uConn.Extensions {
+-		if ce, ok := extension.(*utls.SupportedCurvesExtension); ok {
+-			ce.Curves = common.Filter(ce.Curves, func(curveID utls.CurveID) bool {
+-				return curveID != utls.X25519MLKEM768
+-			})
+-		}
+-		if ks, ok := extension.(*utls.KeyShareExtension); ok {
+-			ks.KeyShares = common.Filter(ks.KeyShares, func(share utls.KeyShare) bool {
+-				return share.Group != utls.X25519MLKEM768
+-			})
+-		}
+-	}
+-	err = uConn.BuildHandshakeState()
+-	if err != nil {
+-		return nil, err
+-	}
+ 
+ 	if len(uConfig.NextProtos) > 0 {
+ 		for _, extension := range uConn.Extensions {
+ 			if alpnExtension, isALPN := extension.(*utls.ALPNExtension); isALPN {
+ 				alpnExtension.AlpnProtocols = uConfig.NextProtos
++				err = uConn.BuildHandshakeState()
++				if err != nil {
++					return nil, err
++				}
+ 				break
+ 			}
+ 		}
+ 	}
+ 
+ 	hello := uConn.HandshakeState.Hello
+@@ -200,6 +187,9 @@
+ 		return nil, E.New("nil KeyShareKeys")
+ 	}
+ 	ecdheKey := keyShareKeys.Ecdhe
++	if ecdheKey == nil {
++		ecdheKey = keyShareKeys.MlkemEcdhe
++	}
+ 	if ecdheKey == nil {
+ 		return nil, E.New("nil ecdheKey")
+ 	}
+--- /dev/null
++++ b/common/tls/reality_xdial_test.go
+@@ -0,0 +1,164 @@
++//go:build with_utls
++
++package tls
++
++import (
++	"bytes"
++	"context"
++	"crypto/ecdh"
++	"crypto/rand"
++	stdtls "crypto/tls"
++	"encoding/base64"
++	"encoding/binary"
++	"encoding/hex"
++	"io"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"testing"
++	"time"
++
++	"github.com/sagernet/sing-box/option"
++	"github.com/sagernet/sing/common/logger"
++	utls "github.com/metacubex/utls"
++)
++
++type recordingRealityConn struct {
++	net.Conn
++	written bytes.Buffer
++}
++
++func (r *recordingRealityConn) Write(p []byte) (int, error) {
++	r.written.Write(p)
++	return r.Conn.Write(p)
++}
++
++func clientHelloContainsUint16(wire []byte, target uint16) bool {
++	var needle [2]byte
++	binary.BigEndian.PutUint16(needle[:], target)
++	return bytes.Contains(wire, needle[:])
++}
++
++func TestXDialRealityClientPreservesMLKEM768AndVerifiesBothCamouflageCurves(t *testing.T) {
++	cases := []struct {
++		name   string
++		curves []stdtls.CurveID
++	}{
++		{
++			name:   "post-quantum-x25519mlkem768",
++			curves: []stdtls.CurveID{stdtls.X25519MLKEM768, stdtls.X25519},
++		},
++		{
++			name:   "classic-x25519-only",
++			curves: []stdtls.CurveID{stdtls.X25519},
++		},
++	}
++
++	for _, tc := range cases {
++		t.Run(tc.name, func(t *testing.T) {
++			camouflage := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++				w.WriteHeader(http.StatusOK)
++			}))
++			camouflage.TLS = &stdtls.Config{
++				MinVersion:       stdtls.VersionTLS13,
++				MaxVersion:       stdtls.VersionTLS13,
++				CurvePreferences: tc.curves,
++			}
++			camouflage.StartTLS()
++			defer camouflage.Close()
++
++			priv, err := ecdh.X25519().GenerateKey(rand.Reader)
++			if err != nil {
++				t.Fatal(err)
++			}
++			var sid [8]byte
++			if _, err := rand.Read(sid[:]); err != nil {
++				t.Fatal(err)
++			}
++			pubB64 := base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes())
++			sidHex := hex.EncodeToString(sid[:])
++
++			ln, err := net.Listen("tcp", "127.0.0.1:0")
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer ln.Close()
++
++			rCfg := &utls.RealityConfig{
++				DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
++					var d net.Dialer
++					return d.DialContext(ctx, network, address)
++				},
++				Type:        "tcp",
++				Dest:        camouflage.Listener.Addr().String(),
++				ServerNames: map[string]bool{"example.com": true},
++				PrivateKey:  priv.Bytes(),
++				ShortIds:    map[[8]byte]bool{sid: true},
++			}
++			rCfg.SessionTicketsDisabled = true
++
++			serverDone := make(chan error, 1)
++			go func() {
++				rawServer, aErr := ln.Accept()
++				if aErr != nil {
++					serverDone <- aErr
++					return
++				}
++				defer rawServer.Close()
++				rConn, rErr := utls.RealityServer(context.Background(), rawServer, rCfg)
++				if rErr != nil {
++					serverDone <- rErr
++					return
++				}
++				defer rConn.Close()
++				_, wErr := rConn.Write([]byte("reality-pq-ok"))
++				serverDone <- wErr
++			}()
++
++			clientCfg, err := NewRealityClient(context.Background(), logger.NOP(), "127.0.0.1", option.OutboundTLSOptions{
++				Enabled:    true,
++				ServerName: "example.com",
++				UTLS: &option.OutboundUTLSOptions{
++					Enabled:     true,
++					Fingerprint: "chrome",
++				},
++				Reality: &option.OutboundRealityOptions{
++					Enabled:   true,
++					PublicKey: pubB64,
++					ShortID:   sidHex,
++				},
++			})
++			if err != nil {
++				t.Fatalf("NewRealityClient: %v", err)
++			}
++
++			rawClient, err := net.DialTimeout("tcp", ln.Addr().String(), 5*time.Second)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer rawClient.Close()
++			rec := &recordingRealityConn{Conn: rawClient}
++
++			tlsConn, err := ClientHandshake(context.Background(), rec, clientCfg)
++			if err != nil {
++				t.Fatalf("ClientHandshake failed: %v", err)
++			}
++			defer tlsConn.Close()
++
++			if !clientHelloContainsUint16(rec.written.Bytes(), uint16(utls.X25519MLKEM768)) {
++				t.Fatal("Chrome Reality ClientHello must retain X25519MLKEM768 key share for modern Reality servers")
++			}
++
++			reply := make([]byte, len("reality-pq-ok"))
++			if _, err := io.ReadFull(tlsConn, reply); err != nil {
++				t.Fatalf("read tunnel payload: %v", err)
++			}
++			if string(reply) != "reality-pq-ok" {
++				t.Fatalf("reply = %q, want reality-pq-ok", string(reply))
++			}
++			if sErr := <-serverDone; sErr != nil {
++				t.Fatalf("RealityServer error: %v", sErr)
++			}
++		})
++	}
++}

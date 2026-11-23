@@ -12,7 +12,7 @@ enum ProfileManagementAction: String, Identifiable {
         case .export: return "导出配置"
         case .delete: return "删除配置"
         case .empty: return "新建空白配置"
-        case .file: return "从文件导入"
+        case .file: return "从文件或文本导入"
         case .subscription: return "从链接订阅"
         }
     }
@@ -87,7 +87,7 @@ struct ProfileNavigation: View {
                     .font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
                     .padding(.horizontal, 8).padding(.bottom, 1)
                 addButton(.empty, title: "新建空白配置…", icon: "plus")
-                addButton(.file, title: "从文件导入…", icon: "doc")
+                addButton(.file, title: "从文件或文本导入…", icon: "doc")
                 addButton(.subscription, title: "从链接订阅…", icon: "link")
             }
             .padding(6).frame(width: pickerWidth)
@@ -379,6 +379,11 @@ struct ProfileManagementSheet: View {
                         Button("选择配置文件…", action: chooseFile)
                         Text(fileName).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
                     }
+                    TextEditor(text: $fileContents)
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(minHeight: 78, maxHeight: 120)
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.3)))
+                        .onChange(of: fileContents) { preview = nil }
                 }
                 if action == .empty { Text("创建一份独立的线路和规则来源。随后可在全局线路组和场景中使用这些资源。").font(.caption).foregroundStyle(.secondary) }
                 if action == .file || action == .subscription { Toggle("仅导入线路，另建默认场景", isOn: $nodesOnly).font(.caption) }
@@ -478,6 +483,11 @@ struct ProfileManagementSheet: View {
         } catch { self.error = error.localizedDescription }
     }
 
+    private var isInlineShareURI: Bool {
+        let lower = url.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["vless://", "ss://", "trojan://", "vmess://", "anytls://"].contains { lower.hasPrefix($0) }
+    }
+
     private func perform() {
         error = nil
         if imports && preview == nil {
@@ -486,9 +496,13 @@ struct ProfileManagementSheet: View {
                 defer { busy = false }
                 do {
                     let parsed: Profile
-                    if action == .subscription {
+                    if action == .subscription && !isInlineShareURI {
                         parsed = try await ProfileDocumentService.read(
                             source: pendingSource, profileID: newID, state: state)
+                    } else if action == .subscription && isInlineShareURI {
+                        parsed = try await ProfileDocumentService.read(
+                            content: url.trimmingCharacters(in: .whitespacesAndNewlines),
+                            url: "", profileID: newID, nodesOnly: nodesOnly)
                     } else {
                         parsed = try await ProfileDocumentService.read(content: fileContents,
                             url: "", profileID: newID, nodesOnly: nodesOnly)
@@ -518,7 +532,7 @@ struct ProfileManagementSheet: View {
             if !state.insertProfile(copied) { error = state.profileOperationError ?? state.profilePersistenceError; return }
         case .file, .subscription:
             guard let preview else { return }
-            let source = action == .subscription ? pendingSource : nil
+            let source = (action == .subscription && !isInlineShareURI) ? pendingSource : nil
             let imported = ProfileRecord(id: newID, name: name, profile: preview, source: source, baseline: source == nil ? nil : preview)
             if !state.insertProfile(imported) { error = state.profileOperationError ?? state.profilePersistenceError; return }
         case .export:

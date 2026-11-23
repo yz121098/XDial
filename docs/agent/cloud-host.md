@@ -1,8 +1,10 @@
 # 添加我的云主机
 
-用户在自己的 Linux 服务器上部署一个代理，保存为一条普通线路。iPhone 和 Mac 共用一个向导（`apple/CloudHost`），
-SSH、检查、部署和回滚都在 Go 核心 `core/cloudhost`（经 Libbox 的 `CloudHostSetup` 调用），不依赖桌面 shell。
-第一版是直连自有服务器的 Shadowsocks 2022（`2022-blake3-aes-128-gcm`，无需域名和证书）。
+用户在自己的 Linux 服务器上部署一个代理，保存为一条普通线路。iPhone、Mac（`apple/CloudHost`）与 Windows（`CloudHostWizardModal`）共用同一套 Go 核心
+`core/cloudhost`（经 Libbox 的 `CloudHostSetup` 调用），SSH、检查、部署和回滚都不依赖桌面 shell。
+支持两种无需自有域名与证书的协议：
+- **VLESS + Reality（默认推荐）**：`vless` + `xtls-rprx-vision` + X25519 Reality 握手伪装（默认伪装域名 `www.microsoft.com`，支持自定义域名与空闲的 `443` 或 `1024–65535` 端口，原生通过 XUDP 承载 UDP）。
+- **Shadowsocks 2022**：`2022-blake3-aes-128-gcm`（端口 `1024–65535`，同时监听 TCP 和 UDP）。
 
 ## 流程
 
@@ -12,8 +14,8 @@ SSH、检查、部署和回滚都在 Go 核心 `core/cloudhost`（经 Libbox 的
 2. **只读检查**：判断权限（root、免密 sudo 或用登录密码 sudo），读取系统、架构、systemd、apt、已有 sing-box 和服务、
    本工具以前留下的代理、ufw/firewalld 状态和已监听端口。阻断条件：非 Ubuntu 20.04+ / Debian 12+、非 amd64/arm64、
    没有 systemd、没有 root 或 sudo、无法读取的同名服务。
-3. **改动清单**：按所选端口列出每一项改动，用户确认后才执行。端口不能被占用，也不能低于 1024。
-   改端口会立即作废旧清单，按新端口重新生成之前、以及生成期间都不能部署；只有与输入端口一致的最新清单才能确认。
+3. **改动清单**：按所选协议、伪装域名与端口列出每一项改动，用户确认后才执行。端口不能被占用；Shadowsocks 2022 需在 `1024–65535`，VLESS + Reality 额外允许空闲的 `443`。
+   改协议、伪装域名或端口都会立即作废旧清单，重新生成之前、以及生成期间都不能部署；只有与当前选项一致的最新清单才能确认。
 4. **部署**：任何一步失败或用户取消，都按相反顺序撤销本次做过的改动；再次运行时复用已有代理，或按新端口改配置。
 5. **验证**：在 App 内建一个只含这条线路的临时 sing-box 会话，经它发出三项 HTTPS 请求，不改动当前连接：
    `www.gstatic.com/generate_204`（连通，几十字节）、`1.1.1.1/cdn-cgi/trace`（出口 IP，读取上限 64 KB，实际不到 1 KB）、

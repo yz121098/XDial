@@ -47,10 +47,18 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 Set-Location (Join-Path $RepoRoot "windows")
 $env:GOWORK = $WinWorkFile
 
-$VersionTag = (git -C $RepoRoot describe --tags --always --dirty 2>$null)
-if (-not $VersionTag) { $VersionTag = "v0.9.8-windows" }
+$BaseVersion = "v0.9.9"
+$GitDesc = (git -C $RepoRoot rev-parse --short HEAD 2>$null)
+$DirtySuffix = ""
+$StatusOut = (git -C $RepoRoot status --porcelain 2>$null)
+if ($StatusOut) { $DirtySuffix = "+dev" }
+if ($GitDesc) {
+    $VersionTag = "$BaseVersion ($GitDesc$DirtySuffix)"
+} else {
+    $VersionTag = "$BaseVersion-windows"
+}
 
-$LdFlags = "-s -w -X main.version=$VersionTag"
+$LdFlags = "-s -w -X 'main.version=$VersionTag'"
 if (-not $DebugConsole) {
     $LdFlags = "-H=windowsgui $LdFlags"
 }
@@ -58,4 +66,13 @@ if (-not $DebugConsole) {
 go build -tags "with_gvisor,with_utls,production" -ldflags $LdFlags -o $OutBinary .
 if ($LASTEXITCODE -ne 0) { throw "Go build failed" }
 
+$ZipPath = Join-Path $OutDir "XDial-windows-amd64.zip"
+$FilesToPack = @($OutBinary)
+$WintunDll = Join-Path $OutDir "wintun.dll"
+if (Test-Path $WintunDll) {
+    $FilesToPack += $WintunDll
+}
+Compress-Archive -Path $FilesToPack -DestinationPath $ZipPath -Force
+
 Write-Host "Build succeeded: $OutBinary"
+Write-Host "Package ready:   $ZipPath"

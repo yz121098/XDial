@@ -209,7 +209,7 @@ final class LineLatencyStore: ObservableObject {
     }
 
     private func supportsStandalone(_ line: Line) -> Bool {
-        standaloneRequest != nil && ["direct", "trojan", "shadowsocks", "vmess", "anytls"].contains(line.type)
+        standaloneRequest != nil && ["direct", "trojan", "shadowsocks", "vmess", "vless", "anytls"].contains(line.type)
     }
     private func leaves(_ root: Line, profileID: String) -> [Line] {
         let catalog = catalogs[profileID] ?? (self.profileID == profileID ? lines : [:])

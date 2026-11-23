@@ -13,7 +13,7 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
 
     var id: String
     var name: String
-    var type: String  // direct / vpn / trojan / shadowsocks / vmess / anytls / tailscale
+    var type: String  // direct / vpn / trojan / shadowsocks / vmess / vless / anytls / tailscale
     var enabled: Bool = true
     var verified: Bool = false
 
@@ -35,6 +35,17 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
     var vmessPort: Int = 443
     var vmessUUID: String = ""
     var vmessAltID: Int = 0
+
+    var vlessServer: String = ""
+    var vlessPort: Int = 443
+    var vlessUUID: String = ""
+    var vlessFlow: String = "xtls-rprx-vision"
+    var vlessSNI: String = ""
+    var vlessClientFingerprint: String = "chrome"
+    var vlessALPN: [String] = []
+    var vlessRealityPublicKey: String = ""
+    var vlessRealityShortID: String = ""
+    var vlessPacketEncoding: String = ""
 
     var anytlsServer: String = ""
     var anytlsPort: Int = 443
@@ -87,6 +98,16 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
         case vmessPort = "vmess_port"
         case vmessUUID = "vmess_uuid"
         case vmessAltID = "vmess_alt_id"
+        case vlessServer = "vless_server"
+        case vlessPort = "vless_port"
+        case vlessUUID = "vless_uuid"
+        case vlessFlow = "vless_flow"
+        case vlessSNI = "vless_sni"
+        case vlessClientFingerprint = "vless_client_fingerprint"
+        case vlessALPN = "vless_alpn"
+        case vlessRealityPublicKey = "vless_reality_public_key"
+        case vlessRealityShortID = "vless_reality_short_id"
+        case vlessPacketEncoding = "vless_packet_encoding"
         case anytlsServer = "anytls_server"
         case anytlsPort = "anytls_port"
         case anytlsPassword = "anytls_password"
@@ -106,6 +127,9 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
          trojanServer: String = "", trojanPort: Int = 443, trojanPassword: String = "", trojanSNI: String = "",
          ssServer: String = "", ssPort: Int = 8388, ssMethod: String = "aes-256-gcm", ssPassword: String = "",
          vmessServer: String = "", vmessPort: Int = 443, vmessUUID: String = "", vmessAltID: Int = 0,
+         vlessServer: String = "", vlessPort: Int = 443, vlessUUID: String = "", vlessFlow: String = "xtls-rprx-vision",
+         vlessSNI: String = "", vlessClientFingerprint: String = "chrome", vlessALPN: [String] = [],
+         vlessRealityPublicKey: String = "", vlessRealityShortID: String = "", vlessPacketEncoding: String = "",
          anytlsServer: String = "", anytlsPort: Int = 443, anytlsPassword: String = "", anytlsSNI: String = "",
          anytlsClientFingerprint: String = "chrome", anytlsALPN: [String] = ["h2"],
          anytlsIdleSessionCheckInterval: Int = 30, anytlsIdleSessionTimeout: Int = 30,
@@ -118,16 +142,20 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
         self.trojanServer = trojanServer; self.trojanPort = trojanPort; self.trojanPassword = trojanPassword; self.trojanSNI = trojanSNI
         self.ssServer = ssServer; self.ssPort = ssPort; self.ssMethod = ssMethod; self.ssPassword = ssPassword
         self.vmessServer = vmessServer; self.vmessPort = vmessPort; self.vmessUUID = vmessUUID; self.vmessAltID = vmessAltID
+        self.vlessServer = vlessServer; self.vlessPort = vlessPort; self.vlessUUID = vlessUUID; self.vlessFlow = vlessFlow
+        self.vlessSNI = vlessSNI; self.vlessClientFingerprint = vlessClientFingerprint; self.vlessALPN = vlessALPN
+        self.vlessRealityPublicKey = vlessRealityPublicKey; self.vlessRealityShortID = vlessRealityShortID
+        self.vlessPacketEncoding = vlessPacketEncoding
         self.anytlsServer = anytlsServer; self.anytlsPort = anytlsPort; self.anytlsPassword = anytlsPassword; self.anytlsSNI = anytlsSNI
         self.anytlsClientFingerprint = anytlsClientFingerprint
         self.anytlsALPN = anytlsALPN
         self.anytlsIdleSessionCheckInterval = anytlsIdleSessionCheckInterval
         self.anytlsIdleSessionTimeout = anytlsIdleSessionTimeout
         self.anytlsMinIdleSession = anytlsMinIdleSession
-        // AnyTLS always exposes native UoT in the embedded sing-box runtime.
+        // AnyTLS / VLESS always expose native UDP multiplexing in sing-box.
         // Keep an explicitly imported false as source metadata, but make new
-        // manually created AnyTLS Lines describe their real capability.
-        self.udp = udp ?? (type == "anytls")
+        // manually created Lines describe their real capability.
+        self.udp = udp ?? (type == "anytls" || type == "vless")
         self.tfo = tfo
         self.tailscaleExitNode = tailscaleExitNode
         self.tailscaleMagicDNS = tailscaleMagicDNS
@@ -165,6 +193,16 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
         vmessPort = try c.decodeIfPresent(Int.self, forKey: .vmessPort) ?? 443
         vmessUUID = try c.decodeIfPresent(String.self, forKey: .vmessUUID) ?? ""
         vmessAltID = try c.decodeIfPresent(Int.self, forKey: .vmessAltID) ?? 0
+        vlessServer = try c.decodeIfPresent(String.self, forKey: .vlessServer) ?? ""
+        vlessPort = try c.decodeIfPresent(Int.self, forKey: .vlessPort) ?? 443
+        vlessUUID = try c.decodeIfPresent(String.self, forKey: .vlessUUID) ?? ""
+        vlessFlow = try c.decodeIfPresent(String.self, forKey: .vlessFlow) ?? ""
+        vlessSNI = try c.decodeIfPresent(String.self, forKey: .vlessSNI) ?? ""
+        vlessClientFingerprint = try c.decodeIfPresent(String.self, forKey: .vlessClientFingerprint) ?? ""
+        vlessALPN = try c.decodeIfPresent([String].self, forKey: .vlessALPN) ?? []
+        vlessRealityPublicKey = try c.decodeIfPresent(String.self, forKey: .vlessRealityPublicKey) ?? ""
+        vlessRealityShortID = try c.decodeIfPresent(String.self, forKey: .vlessRealityShortID) ?? ""
+        vlessPacketEncoding = try c.decodeIfPresent(String.self, forKey: .vlessPacketEncoding) ?? ""
         anytlsServer = try c.decodeIfPresent(String.self, forKey: .anytlsServer) ?? ""
         anytlsPort = try c.decodeIfPresent(Int.self, forKey: .anytlsPort) ?? 443
         anytlsPassword = try c.decodeIfPresent(String.self, forKey: .anytlsPassword) ?? ""
@@ -279,6 +317,55 @@ struct Line: Codable, Identifiable, Hashable, Sendable {
         }
         if !Self.anyTLSMinIdleSessionRange.contains(anytlsMinIdleSession) {
             return "最少空闲会话数必须是 0–64"
+        }
+        return nil
+    }
+
+    static func isValidRealityPublicKey(_ raw: String) -> Bool {
+        guard !raw.isEmpty, raw.trimmingCharacters(in: .whitespacesAndNewlines) == raw else { return false }
+        let unpadded = raw.hasSuffix("=") ? String(raw.dropLast()) : raw
+        guard unpadded.count == 43, raw.count <= 44 else { return false }
+        let std = unpadded.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/") + "="
+        guard let data = Data(base64Encoded: std), data.count == 32 else { return false }
+        return true
+    }
+
+    static func isValidRealityShortID(_ raw: String) -> Bool {
+        if raw.isEmpty { return true }
+        guard raw.count <= 16, raw.count.isMultiple(of: 2) else { return false }
+        return raw.unicodeScalars.allSatisfy {
+            ($0.value >= 48 && $0.value <= 57) || ($0.value >= 65 && $0.value <= 70) || ($0.value >= 97 && $0.value <= 102)
+        }
+    }
+
+    var vlessOptionsValidationIssue: String? {
+        guard type == "vless" else { return nil }
+        if !["", "xtls-rprx-vision"].contains(vlessFlow) {
+            return "不支持的 VLESS Flow（仅支持留空或 xtls-rprx-vision）"
+        }
+        if !["", "xudp", "packetaddr"].contains(vlessPacketEncoding) {
+            return "不支持的 UDP 封装格式"
+        }
+        if !Self.anyTLSSupportedClientFingerprints.contains(vlessClientFingerprint) {
+            return "不支持的 TLS 客户端指纹"
+        }
+        if let issue = Self.validateAnyTLSALPN(vlessALPN) {
+            return issue
+        }
+        if vlessRealityPublicKey.isEmpty {
+            if !vlessRealityShortID.isEmpty {
+                return "填写了 Reality Short ID 时必须同时填写 Reality 公钥"
+            }
+            return nil
+        }
+        if !Self.isValidRealityPublicKey(vlessRealityPublicKey) {
+            return "Reality 公钥无效（应为 32 字节 X25519 公钥的 Base64URL 编码）"
+        }
+        if !Self.isValidRealityShortID(vlessRealityShortID) {
+            return "Reality Short ID 无效（应为最多 16 位偶数长度十六进制字符）"
+        }
+        if vlessSNI.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "启用 Reality 时必须填写伪装域名（SNI）"
         }
         return nil
     }

@@ -15,6 +15,7 @@ const (
 	LineTypeTrojan      LineType = "trojan"
 	LineTypeShadowsocks LineType = "shadowsocks"
 	LineTypeVMess       LineType = "vmess"
+	LineTypeVLESS       LineType = "vless"
 	LineTypeAnyTLS      LineType = "anytls"
 	LineTypeTailscale   LineType = "tailscale"
 )
@@ -56,6 +57,18 @@ type Line struct {
 	VMessPort   int    `json:"vmess_port,omitempty"`
 	VMessUUID   string `json:"vmess_uuid,omitempty"`
 	VMessAltID  int    `json:"vmess_alt_id,omitempty"`
+
+	// VLESS (+ Reality / TLS)
+	VLESSServer            string   `json:"vless_server,omitempty"`
+	VLESSPort              int      `json:"vless_port,omitempty"`
+	VLESSUUID              string   `json:"vless_uuid,omitempty"`
+	VLESSFlow              string   `json:"vless_flow,omitempty"`
+	VLESSSNI               string   `json:"vless_sni,omitempty"`
+	VLESSClientFingerprint string   `json:"vless_client_fingerprint,omitempty"`
+	VLESSALPN              []string `json:"vless_alpn,omitempty"`
+	VLESSRealityPublicKey  string   `json:"vless_reality_public_key,omitempty"`
+	VLESSRealityShortID    string   `json:"vless_reality_short_id,omitempty"`
+	VLESSPacketEncoding    string   `json:"vless_packet_encoding,omitempty"`
 
 	// AnyTLS
 	AnyTLSServer                   string   `json:"anytls_server,omitempty"`

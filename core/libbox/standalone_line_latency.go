@@ -49,7 +49,7 @@ func standaloneLineProbeOptions(line *config.Line) (map[string]interface{}, erro
 	switch line.Type {
 	case config.LineTypeDirect:
 		outbound = map[string]interface{}{"type": "direct"}
-	case config.LineTypeTrojan, config.LineTypeShadowsocks, config.LineTypeVMess, config.LineTypeAnyTLS:
+	case config.LineTypeTrojan, config.LineTypeShadowsocks, config.LineTypeVMess, config.LineTypeVLESS, config.LineTypeAnyTLS:
 		outbound = config.LineOutbound(line)
 	default:
 		return nil, fmt.Errorf("此线路需要使用已连接场景测速")

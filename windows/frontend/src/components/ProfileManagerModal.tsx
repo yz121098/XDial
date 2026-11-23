@@ -310,12 +310,14 @@ export const ProfileManagerModal: React.FC<{
         {mode === "url" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             <label style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>
-              {en ? "Subscription HTTPS URL" : "订阅链接（HTTPS）"}
+              {en
+                ? "Subscription HTTPS URL or Share Link (vless://…)"
+                : "订阅链接（HTTPS）或节点分享链接（vless://…）"}
             </label>
             <input
               className="xd-input"
               value={url}
-              placeholder="https://..."
+              placeholder="https://... / vless://..."
               onChange={(e) => setUrl(e.target.value)}
             />
           </div>
@@ -348,8 +350,8 @@ export const ProfileManagerModal: React.FC<{
               value={content}
               placeholder={
                 en
-                  ? "Paste XDial/sing-box JSON, Clash YAML, Surge conf, or ss:// / trojan:// / anytls:// links…"
-                  : "支持粘贴 XDial / sing-box JSON、Clash YAML、Surge 配置或 Base64 节点链接…"
+                  ? "Paste XDial/sing-box JSON, Clash YAML, Surge conf, or vless:// / ss:// / trojan:// / anytls:// links…"
+                  : "支持粘贴 XDial / sing-box JSON、Clash YAML、Surge 配置或 vless:// 等 Base64 节点链接…"
               }
               onChange={(e) => setContent(e.target.value)}
             />

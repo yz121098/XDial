@@ -923,6 +923,17 @@ final class AppState: ObservableObject {
             if UUID(uuidString: line.vmessUUID) == nil {
                 issues.append(tr("UUID 无效", "UUID is invalid"))
             }
+        case "vless":
+            if line.vlessServer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                issues.append(tr("缺少服务器", "server is missing"))
+            }
+            if !(1...65_535).contains(line.vlessPort) {
+                issues.append(tr("端口无效", "port is invalid"))
+            }
+            if UUID(uuidString: line.vlessUUID) == nil {
+                issues.append(tr("UUID 无效", "UUID is invalid"))
+            }
+            if let issue = line.vlessOptionsValidationIssue { issues.append(issue) }
         case "anytls":
             if line.anytlsServer.isEmpty || line.anytlsPassword.isEmpty || !(1...65_535).contains(line.anytlsPort) {
                 issues.append(tr("请填写 AnyTLS 服务器、端口和密码", "Enter an AnyTLS server, port and password"))
@@ -1755,6 +1766,11 @@ final class AppState: ObservableObject {
             store(&line.ssPassword, key: Self.vaultKey(scope + ["ss"]))
             store(&line.vmessServer, key: Self.vaultKey(scope + ["vmess-server"]))
             store(&line.vmessUUID, key: Self.vaultKey(scope + ["vmess"]))
+            store(&line.vlessServer, key: Self.vaultKey(scope + ["vless-server"]))
+            store(&line.vlessUUID, key: Self.vaultKey(scope + ["vless-uuid"]))
+            store(&line.vlessSNI, key: Self.vaultKey(scope + ["vless-sni"]))
+            store(&line.vlessRealityPublicKey, key: Self.vaultKey(scope + ["vless-reality-pbk"]))
+            store(&line.vlessRealityShortID, key: Self.vaultKey(scope + ["vless-reality-sid"]))
             store(&line.tailscaleExitNode, key: Self.vaultKey(scope + ["tailscale-exit-node"]))
         }
 
@@ -2002,6 +2018,8 @@ final class AppState: ObservableObject {
                 || !line.trojanServer.isEmpty || !line.trojanPassword.isEmpty || !line.trojanSNI.isEmpty
                 || !line.ssServer.isEmpty || !line.ssPassword.isEmpty
                 || !line.vmessServer.isEmpty || !line.vmessUUID.isEmpty
+                || !line.vlessServer.isEmpty || !line.vlessUUID.isEmpty || !line.vlessSNI.isEmpty
+                || !line.vlessRealityPublicKey.isEmpty || !line.vlessRealityShortID.isEmpty
                 || !line.tailscaleExitNode.isEmpty || !line.anytlsPassword.isEmpty || !line.anytlsServer.isEmpty
                 || !line.anytlsSNI.isEmpty || !line.groupURL.isEmpty || line.nativeOptions != nil
         }
@@ -2042,6 +2060,11 @@ final class AppState: ObservableObject {
             restore(&line.ssPassword, key: Self.vaultKey(scope + ["ss"]))
             restore(&line.vmessServer, key: Self.vaultKey(scope + ["vmess-server"]))
             restore(&line.vmessUUID, key: Self.vaultKey(scope + ["vmess"]))
+            restore(&line.vlessServer, key: Self.vaultKey(scope + ["vless-server"]))
+            restore(&line.vlessUUID, key: Self.vaultKey(scope + ["vless-uuid"]))
+            restore(&line.vlessSNI, key: Self.vaultKey(scope + ["vless-sni"]))
+            restore(&line.vlessRealityPublicKey, key: Self.vaultKey(scope + ["vless-reality-pbk"]))
+            restore(&line.vlessRealityShortID, key: Self.vaultKey(scope + ["vless-reality-sid"]))
             restore(&line.tailscaleExitNode, key: Self.vaultKey(scope + ["tailscale-exit-node"]))
         }
 

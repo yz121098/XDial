@@ -115,6 +115,14 @@ func (c *CloudHostSetup) ConnectAndInspect(targetJSON string) string {
 	return cloudHostReply(report, nil)
 }
 
+func parseCloudHostOptions(optionsJSON string) (cloudhost.Options, error) {
+	var opts cloudhost.Options
+	if len(optionsJSON) > 8*1024 || json.Unmarshal([]byte(optionsJSON), &opts) != nil {
+		return opts, fmt.Errorf("invalid request")
+	}
+	return opts, nil
+}
+
 // Plan lists the exact changes for the port (0 picks the suggested one).
 func (c *CloudHostSetup) Plan(port int) string {
 	session := c.current()
@@ -122,6 +130,20 @@ func (c *CloudHostSetup) Plan(port int) string {
 		return cloudHostReply(nil, fmt.Errorf("no session"))
 	}
 	plan, err := session.Plan(port)
+	return cloudHostReply(plan, err)
+}
+
+// PlanWithOptions lists the exact changes for the chosen protocol, port and Reality SNI.
+func (c *CloudHostSetup) PlanWithOptions(optionsJSON string) string {
+	opts, err := parseCloudHostOptions(optionsJSON)
+	if err != nil {
+		return cloudHostReply(nil, err)
+	}
+	session := c.current()
+	if session == nil {
+		return cloudHostReply(nil, fmt.Errorf("no session"))
+	}
+	plan, err := session.PlanWithOptions(opts)
 	return cloudHostReply(plan, err)
 }
 
@@ -135,6 +157,29 @@ func (c *CloudHostSetup) Deploy(port int, listener CloudHostListener) string {
 	ctx := c.begin(15 * time.Minute)
 	defer c.end()
 	result, err := session.Deploy(ctx, port, func(event cloudhost.Event) {
+		if listener == nil {
+			return
+		}
+		if raw, err := json.Marshal(event); err == nil {
+			listener.OnEvent(string(raw))
+		}
+	})
+	return cloudHostReply(result, err)
+}
+
+// DeployWithOptions applies the confirmed plan for the chosen protocol, port and Reality SNI.
+func (c *CloudHostSetup) DeployWithOptions(optionsJSON string, listener CloudHostListener) string {
+	opts, err := parseCloudHostOptions(optionsJSON)
+	if err != nil {
+		return cloudHostReply(nil, err)
+	}
+	session := c.current()
+	if session == nil {
+		return cloudHostReply(nil, fmt.Errorf("no session"))
+	}
+	ctx := c.begin(15 * time.Minute)
+	defer c.end()
+	result, err := session.DeployWithOptions(ctx, opts, func(event cloudhost.Event) {
 		if listener == nil {
 			return
 		}

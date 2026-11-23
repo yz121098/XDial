@@ -26,8 +26,30 @@ func SubscriptionRuntimeCatalog(profileJSON string) (string, error) {
 	return string(data), nil
 }
 
+// ParseShareLinks parses one or more proxy share links (such as vless://, ss://,
+// trojan://, vmess://, anytls:// or their Base64 bundle) and returns a JSON array
+// of config.Line objects without performing any network requests.
+func ParseShareLinks(content string) (string, error) {
+	if len(content) > maxParsedSubscriptionBytes {
+		return "", fmt.Errorf("input is too large")
+	}
+	lines, err := subscription.ParseShareURIs(content)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(lines)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // ParseSubscription 解析订阅并展开远程规则集，返回可直接交给 Swift 解码的 JSON。
 func ParseSubscription(url, content, format string) (string, error) {
+	if strings.TrimSpace(content) == "" && subscription.IsShareURI(url) {
+		content = url
+		url = ""
+	}
 	result, err := subscription.ParseStrict(url, content, format)
 	if err != nil {
 		if content == "" && url != "" {
@@ -116,7 +138,7 @@ func subscriptionNodeUsable(line config.Line) bool {
 		return false
 	}
 	switch line.Type {
-	case config.LineTypeTrojan, config.LineTypeShadowsocks, config.LineTypeVMess, config.LineTypeAnyTLS:
+	case config.LineTypeTrojan, config.LineTypeShadowsocks, config.LineTypeVMess, config.LineTypeVLESS, config.LineTypeAnyTLS:
 		return config.LineHasUsableOutbound(&line)
 	default:
 		return false

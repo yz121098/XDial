@@ -452,6 +452,26 @@ func importDocumentOutbound(raw json.RawMessage, tags map[string]string, allowIn
 		line.VMessPort = integer("server_port")
 		line.VMessUUID = get("uuid")
 		line.VMessAltID = integer("alter_id")
+	case LineTypeVLESS:
+		line.VLESSServer = get("server")
+		line.VLESSPort = integer("server_port")
+		line.VLESSUUID = get("uuid")
+		line.VLESSFlow = get("flow")
+		line.VLESSPacketEncoding = get("packet_encoding")
+		line.VLESSSNI = sni
+		_ = json.Unmarshal(tls["alpn"], &line.VLESSALPN)
+		if string(tls["enabled"]) != "true" {
+			return nil, fmt.Errorf("VLESS import requires enabled TLS")
+		}
+		var utls map[string]json.RawMessage
+		if json.Unmarshal(tls["utls"], &utls) == nil && string(utls["enabled"]) == "true" {
+			_ = json.Unmarshal(utls["fingerprint"], &line.VLESSClientFingerprint)
+		}
+		var reality map[string]json.RawMessage
+		if json.Unmarshal(tls["reality"], &reality) == nil && string(reality["enabled"]) == "true" {
+			_ = json.Unmarshal(reality["public_key"], &line.VLESSRealityPublicKey)
+			_ = json.Unmarshal(reality["short_id"], &line.VLESSRealityShortID)
+		}
 	case LineTypeAnyTLS:
 		line.AnyTLSServer = get("server")
 		line.AnyTLSPort = integer("server_port")
@@ -464,17 +484,24 @@ func importDocumentOutbound(raw json.RawMessage, tags map[string]string, allowIn
 	default:
 		return nil, fmt.Errorf("outbound protocol %q is not supported by this build", line.Type)
 	}
-	if err := allowDocumentKeys(fields, "type", "tag", "server", "server_port", "password", "method", "uuid", "alter_id", "tls", "transport", "multiplex", "tcp_fast_open", "network", "security", "packet_encoding", "idle_session_check_interval", "idle_session_timeout", "min_idle_session"); err != nil {
+	if err := allowDocumentKeys(fields, "type", "tag", "server", "server_port", "password", "method", "uuid", "flow", "alter_id", "tls", "transport", "multiplex", "tcp_fast_open", "network", "security", "packet_encoding", "idle_session_check_interval", "idle_session_timeout", "min_idle_session"); err != nil {
 		return nil, err
 	}
 	// Preserve native options not exposed by the regular form. Generated editable
 	// fields overlay this immutable copy, so form edits and advanced fields coexist.
-	for _, key := range []string{"type", "tag", "server", "server_port", "password", "method", "uuid", "alter_id", "tcp_fast_open"} {
+	for _, key := range []string{"type", "tag", "server", "server_port", "password", "method", "uuid", "flow", "alter_id", "tcp_fast_open"} {
 		delete(fields, key)
 	}
-	if line.Type == LineTypeTrojan || line.Type == LineTypeAnyTLS {
-		if line.Type == LineTypeAnyTLS {
+	if line.Type == LineTypeVLESS {
+		delete(fields, "packet_encoding")
+	}
+	if line.Type == LineTypeTrojan || line.Type == LineTypeAnyTLS || line.Type == LineTypeVLESS {
+		if line.Type == LineTypeAnyTLS || line.Type == LineTypeVLESS {
 			delete(tls, "alpn")
+		}
+		if line.Type == LineTypeVLESS {
+			delete(tls, "utls")
+			delete(tls, "reality")
 		}
 		delete(tls, "enabled")
 		delete(tls, "server_name")
@@ -514,7 +541,7 @@ func validateDocumentProfileWithEmptyGroups(profile *Profile, allowEmpty bool) e
 		}
 		seen[line.ID], lines[line.ID] = true, true
 		switch line.Type {
-		case LineTypeDirect, LineTypeVPN, LineTypeTailscale, LineTypeTrojan, LineTypeShadowsocks, LineTypeVMess, LineTypeAnyTLS:
+		case LineTypeDirect, LineTypeVPN, LineTypeTailscale, LineTypeTrojan, LineTypeShadowsocks, LineTypeVMess, LineTypeVLESS, LineTypeAnyTLS:
 		case LineTypeSelector, LineTypeURLTest:
 			if err := validateGroupReferences(profile, line, false, allowEmpty); err != nil {
 				return err

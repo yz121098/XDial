@@ -571,11 +571,11 @@ func (l *profileLibrary) refreshSource(index int, incoming libraryObject) error 
 				if current == nil || baseline == nil {
 					continue
 				}
-				for _, field := range []string{"vpn_username", "vpn_password", "trojan_password", "ss_password", "vmess_uuid", "anytls_password"} {
+				for _, field := range []string{"vpn_username", "vpn_password", "trojan_password", "ss_password", "vmess_uuid", "vless_uuid", "anytls_password"} {
 					if libraryString(current, field) == libraryString(baseline, field) {
 						continue
 					}
-					for _, endpoint := range []string{"type", "vpn_server", "trojan_server", "ss_server", "vmess_server", "anytls_server"} {
+					for _, endpoint := range []string{"type", "vpn_server", "trojan_server", "ss_server", "vmess_server", "vless_server", "anytls_server"} {
 						if libraryString(current, endpoint) != libraryString(next, endpoint) {
 							return fmt.Errorf("source changed a server with local credentials")
 						}

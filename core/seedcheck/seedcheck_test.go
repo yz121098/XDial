@@ -86,7 +86,7 @@ func TestSecretsAndFormattingDoNotCount(t *testing.T) {
 	}
 	every := Fingerprint(&Seed{Profile: &config.Profile{Lines: []config.Line{{ID: "all", Type: "vpn",
 		VPNUsername: "user-secret", VPNPassword: "pass-secret", TrojanPassword: "trojan-secret", SSPass: "ss-secret",
-		VMessUUID: "uuid-secret", AnyTLSPassword: "anytls-secret", TailscaleAuthKey: "key-secret"}}}}, nil)
+		VMessUUID: "uuid-secret", VLESSUUID: "vless-secret", AnyTLSPassword: "anytls-secret", TailscaleAuthKey: "key-secret"}}}}, nil)
 	if printed, _ := json.Marshal(every); strings.Contains(string(printed), "secret") {
 		t.Fatalf("fingerprint carries credentials: %s", printed)
 	}

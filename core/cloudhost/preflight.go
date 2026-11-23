@@ -3,10 +3,13 @@ package cloudhost
 import (
 	"bufio"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"math/big"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,18 +18,23 @@ import (
 // Fixed locations owned by XDial on the server. Nothing outside these paths,
 // the package it may install and an optional ufw rule is changed.
 const (
-	serviceName    = "xdial-proxy"
-	configDir      = "/etc/xdial-proxy"
-	configPath     = configDir + "/config.json"
-	statePath      = configDir + "/state.json"
-	unitPath       = "/etc/systemd/system/" + serviceName + ".service"
-	aptKeyPath     = "/etc/apt/keyrings/xdial-sagernet.asc"
-	aptSourcePath  = "/etc/apt/sources.list.d/xdial-sagernet.sources"
-	defaultBinary  = "/usr/bin/sing-box"
-	shadowsocksKey = "2022-blake3-aes-128-gcm"
-	portRangeLow   = 20000
-	portRangeHigh  = 59999
-	minFreeKB      = 100 * 1024
+	serviceName              = "xdial-proxy"
+	configDir                = "/etc/xdial-proxy"
+	configPath               = configDir + "/config.json"
+	statePath                = configDir + "/state.json"
+	unitPath                 = "/etc/systemd/system/" + serviceName + ".service"
+	aptKeyPath               = "/etc/apt/keyrings/xdial-sagernet.asc"
+	aptSourcePath            = "/etc/apt/sources.list.d/xdial-sagernet.sources"
+	defaultBinary            = "/usr/bin/sing-box"
+	shadowsocksKey           = "2022-blake3-aes-128-gcm"
+	ProtocolShadowsocks      = "shadowsocks"
+	ProtocolVLESSReality     = "vless-reality"
+	DefaultRealityServerName = "www.microsoft.com"
+	vlessVisionFlow          = "xtls-rprx-vision"
+	vlessDefaultFingerprint  = "chrome"
+	portRangeLow             = 20000
+	portRangeHigh            = 59999
+	minFreeKB                = 100 * 1024
 )
 
 // Issue is one finding of the read-only inspection. Blocking issues stop setup.
@@ -42,10 +50,17 @@ func issue(code, message, english string) Issue {
 
 // Existing describes an XDial proxy a previous setup left on this server.
 type Existing struct {
-	Port     int    `json:"port"`
-	Method   string `json:"method"`
-	Password string `json:"-"`
-	Active   bool   `json:"active"`
+	Protocol   string `json:"protocol,omitempty"`
+	Port       int    `json:"port"`
+	Method     string `json:"method,omitempty"`
+	ServerName string `json:"server_name,omitempty"`
+	Password   string `json:"-"`
+	UUID       string `json:"-"`
+	Flow       string `json:"-"`
+	PrivateKey string `json:"-"`
+	PublicKey  string `json:"-"`
+	ShortID    string `json:"-"`
+	Active     bool   `json:"active"`
 }
 
 // Report is what the user reviews before anything changes.
@@ -285,6 +300,19 @@ type serverConfig struct {
 		ListenPort int    `json:"listen_port"`
 		Method     string `json:"method"`
 		Password   string `json:"password"`
+		Users      []struct {
+			UUID string `json:"uuid"`
+			Flow string `json:"flow"`
+		} `json:"users"`
+		TLS *struct {
+			Enabled    bool   `json:"enabled"`
+			ServerName string `json:"server_name"`
+			Reality    *struct {
+				Enabled    bool     `json:"enabled"`
+				PrivateKey string   `json:"private_key"`
+				ShortID    []string `json:"short_id"`
+			} `json:"reality"`
+		} `json:"tls"`
 	} `json:"inbounds"`
 }
 
@@ -302,10 +330,80 @@ func parseExisting(encoded string) *Existing {
 	}
 	for _, inbound := range config.Inbounds {
 		if inbound.Type == "shadowsocks" && inbound.Tag == inboundTag && inbound.ListenPort > 0 && inbound.Password != "" {
-			return &Existing{Port: inbound.ListenPort, Method: inbound.Method, Password: inbound.Password}
+			return &Existing{
+				Protocol: ProtocolShadowsocks,
+				Port:     inbound.ListenPort,
+				Method:   inbound.Method,
+				Password: inbound.Password,
+			}
+		}
+		if inbound.Type == "vless" && inbound.Tag == vlessInboundTag && inbound.ListenPort > 0 &&
+			len(inbound.Users) > 0 && inbound.Users[0].UUID != "" &&
+			inbound.TLS != nil && inbound.TLS.Enabled && inbound.TLS.ServerName != "" &&
+			inbound.TLS.Reality != nil && inbound.TLS.Reality.Enabled && inbound.TLS.Reality.PrivateKey != "" {
+			privBytes, err := base64.RawURLEncoding.DecodeString(inbound.TLS.Reality.PrivateKey)
+			if err != nil || len(privBytes) != 32 {
+				continue
+			}
+			privKey, err := ecdh.X25519().NewPrivateKey(privBytes)
+			if err != nil {
+				continue
+			}
+			shortID := ""
+			if len(inbound.TLS.Reality.ShortID) > 0 {
+				shortID = strings.ToLower(inbound.TLS.Reality.ShortID[0])
+				if len(shortID) > 16 || len(shortID)%2 != 0 {
+					continue
+				}
+				if _, err := hex.DecodeString(shortID); err != nil {
+					continue
+				}
+			}
+			flow := inbound.Users[0].Flow
+			if flow == "" {
+				flow = vlessVisionFlow
+			}
+			return &Existing{
+				Protocol:   ProtocolVLESSReality,
+				Port:       inbound.ListenPort,
+				ServerName: inbound.TLS.ServerName,
+				UUID:       inbound.Users[0].UUID,
+				Flow:       flow,
+				PrivateKey: inbound.TLS.Reality.PrivateKey,
+				PublicKey:  base64.RawURLEncoding.EncodeToString(privKey.PublicKey().Bytes()),
+				ShortID:    shortID,
+			}
 		}
 	}
 	return nil
+}
+
+func validRealityServerName(raw string) (string, bool) {
+	name := strings.ToLower(strings.TrimSpace(raw))
+	if name == "" {
+		name = DefaultRealityServerName
+	}
+	if len(name) > 253 || !strings.Contains(name, ".") || strings.HasPrefix(name, ".") || strings.HasSuffix(name, ".") {
+		return "", false
+	}
+	if _, err := netip.ParseAddr(name); err == nil {
+		return "", false
+	}
+	if name == "localhost" || strings.HasSuffix(name, ".localhost") || strings.HasSuffix(name, ".local") || strings.HasSuffix(name, ".internal") {
+		return "", false
+	}
+	labels := strings.Split(name, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", false
+		}
+		for _, r := range label {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+				return "", false
+			}
+		}
+	}
+	return name, true
 }
 
 func suggestPort(listening []int, existing *Existing) int {
@@ -336,7 +434,14 @@ func suggestPort(listening []int, existing *Existing) int {
 
 // PortAvailable reports whether the port is free, or already used by XDial's own proxy.
 func (r Report) PortAvailable(port int) bool {
-	if port < 1024 || port > 65535 {
+	return r.PortAvailableForProtocol(port, ProtocolShadowsocks)
+}
+
+// PortAvailableForProtocol reports whether port is allowed and free for the chosen protocol.
+// VLESS + Reality additionally permits TCP/443 when free so it can blend with normal HTTPS.
+func (r Report) PortAvailableForProtocol(port int, protocol string) bool {
+	allow443 := protocol == ProtocolVLESSReality && port == 443
+	if !allow443 && (port < 1024 || port > 65535) {
 		return false
 	}
 	if r.Existing != nil && r.Existing.Port == port {

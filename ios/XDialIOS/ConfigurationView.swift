@@ -5,6 +5,7 @@ struct ConfigurationView: View {
     @EnvironmentObject private var app: AppState
     @State private var section: ConfigSection = .lines
     @State private var showAddSubscription = false
+    @State private var showImportShareLink = false
     @State private var showCloudHostSetup = false
     @State private var editingLineID: String?
     @State private var refreshingSubscriptionIDs: Set<String> = []
@@ -45,6 +46,10 @@ struct ConfigurationView: View {
         .sheet(isPresented: $showCloudHostSetup) {
             CloudHostSetupSheet()
         }
+        .sheet(isPresented: $showImportShareLink) {
+            MobileImportShareLinkSheet()
+                .environmentObject(app)
+        }
         .sheet(isPresented: $showAddSubscription) {
             AddSubscriptionView()
                 .environmentObject(app)
@@ -59,10 +64,17 @@ struct ConfigurationView: View {
         switch section {
         case .lines:
             Menu {
+                Button {
+                    showImportShareLink = true
+                } label: {
+                    Label(app.tr("从分享链接导入…", "Import from Link…"), systemImage: "link.badge.plus")
+                }
+                Divider()
                 addLineButton(type: "vpn", name: "AnyConnect")
                 addLineButton(type: "trojan", name: "Trojan")
                 addLineButton(type: "shadowsocks", name: "Shadowsocks")
                 addLineButton(type: "vmess", name: "VMess")
+                addLineButton(type: "vless", name: "VLESS + Reality")
                 addLineButton(type: "tailscale", name: "Tailscale")
                 Divider()
                 Button {
@@ -468,7 +480,9 @@ private struct LineEditorView: View {
                         .disabled(app.hasActiveTunnel)
                 }
 
-                if app.profile.lines[index].type == "vpn" || app.profile.lines[index].type == "trojan" {
+                if app.profile.lines[index].type == "vpn"
+                    || app.profile.lines[index].type == "trojan"
+                    || (app.profile.lines[index].type == "vless" && app.profile.lines[index].vlessRealityPublicKey.isEmpty) {
                     Section {
                         Toggle(app.tr("允许不安全证书", "Allow insecure certificate"),
                                isOn: lineBinding(index, \.allowInsecure))
@@ -617,6 +631,28 @@ private struct LineEditorView: View {
                 SecureField("UUID", text: lineBinding(index, \.vmessUUID))
                 TextField("Alter ID", value: lineBinding(index, \.vmessAltID), format: .number)
                     .keyboardType(.numberPad)
+            }
+        case "vless":
+            Section("VLESS + Reality") {
+                TextField(app.tr("服务器", "Server"), text: lineBinding(index, \.vlessServer))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField(app.tr("端口", "Port"), value: lineBinding(index, \.vlessPort), format: .number)
+                    .keyboardType(.numberPad)
+                SecureField("UUID", text: lineBinding(index, \.vlessUUID))
+                TextField(app.tr("SNI（伪装域名）", "SNI (Camouflage Domain)"), text: lineBinding(index, \.vlessSNI))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Picker("Flow", selection: lineBinding(index, \.vlessFlow)) {
+                    Text("xtls-rprx-vision").tag("xtls-rprx-vision")
+                    Text(app.tr("无", "None")).tag("")
+                }
+                TextField(app.tr("Reality 公钥", "Reality Public Key"), text: lineBinding(index, \.vlessRealityPublicKey))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                TextField("Reality Short ID", text: lineBinding(index, \.vlessRealityShortID))
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
             }
         case "tailscale":
             Section {
@@ -1895,13 +1931,15 @@ private struct AddSubscriptionView: View {
     private func addParsedSubscription() {
         guard let result = parsedResult else { return }
         let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowerURL = trimmedURL.lowercased()
+        let inlineShare = ["vless://", "ss://", "trojan://", "vmess://", "anytls://"].contains { lowerURL.hasPrefix($0) }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let fileFallback = (localFileName as NSString).deletingPathExtension
-        let fallbackName = URL(string: trimmedURL)?.host
+        let fallbackName = (inlineShare ? result.lines.first?.name : URL(string: trimmedURL)?.host)
             ?? (fileFallback.isEmpty ? app.tr("订阅", "Subscription") : fileFallback)
         app.addSubscription(
             name: trimmedName.isEmpty ? fallbackName : trimmedName,
-            url: trimmedURL,
+            url: inlineShare ? "" : trimmedURL,
             format: format,
             strategy: strategy,
             lines: result.lines,
@@ -1973,6 +2011,7 @@ func mobileLineTypeLabel(_ type: String) -> String {
     case "trojan": return "Trojan"
     case "shadowsocks", "ss": return "Shadowsocks"
     case "vmess": return "VMess"
+    case "vless": return "VLESS"
     case "tailscale": return "Tailscale"
     default: return type
     }
@@ -2002,5 +2041,85 @@ private struct CloudHostSetupSheet: View {
         }
         .interactiveDismissDisabled(model.stage == .deploying)
         .onDisappear { model.close() }
+    }
+}
+
+private struct MobileImportShareLinkSheet: View {
+    @EnvironmentObject private var app: AppState
+    @Environment(\.dismiss) private var dismiss
+    @State private var linkText = ""
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("vless://...", text: $linkText, axis: .vertical)
+                        .lineLimit(4...8)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button {
+                        #if canImport(UIKit)
+                        if let str = UIPasteboard.general.string, !str.isEmpty {
+                            linkText = str
+                        }
+                        #endif
+                    } label: {
+                        Label(app.tr("粘贴剪贴板", "Paste from Clipboard"), systemImage: "doc.on.clipboard")
+                    }
+                } header: {
+                    Text(app.tr("节点分享链接", "Share Link"))
+                } footer: {
+                    Text(app.tr(
+                        "支持 vless://（含 Reality）、ss://、trojan://、vmess://、anytls://（每行一条或 Base64）",
+                        "Supports vless:// (Reality / TLS), ss://, trojan://, vmess://, anytls:// (one per line or Base64)"
+                    ))
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(XDialTheme.danger)
+                    }
+                }
+            }
+            .xdialGroupedBackground()
+            .navigationTitle(app.tr("从链接导入线路", "Import Line"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(app.tr("取消", "Cancel")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(app.tr("导入", "Import")) { importNow() }
+                        .disabled(linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || app.hasActiveTunnel || app.isBusy)
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func importNow() {
+        errorMessage = nil
+        var nsErr: NSError?
+        let raw = LibboxParseShareLinks(linkText, &nsErr)
+        if let nsErr {
+            errorMessage = nsErr.localizedDescription
+            return
+        }
+        guard let decoded = try? JSONDecoder().decode([Line].self, from: Data(raw.utf8)), !decoded.isEmpty else {
+            errorMessage = app.tr("无法解析分享链接", "Could not parse share link")
+            return
+        }
+        for var item in decoded {
+            item.id = item.type + "-" + String(UUID().uuidString.prefix(6)).lowercased()
+            item.enabled = true
+            app.profile.lines.append(item)
+        }
+        if app.save() {
+            dismiss()
+        } else {
+            errorMessage = app.tr("无法保存配置", "Could not save configuration")
+        }
     }
 }
