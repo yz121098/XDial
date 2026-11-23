@@ -1,0 +1,367 @@
+/* XDial Mineral Palette & Surface System — Exact port from XDialPalette.swift & HomeSurfaces.swift */
+
+:root,
+[data-theme="light"] {
+  --accent: #3f5c69;
+  --accent-rgb: 63, 92, 105;
+  --selection: #46555c;
+  --selection-rgb: 70, 85, 92;
+  --success: #3d5d46;
+  --success-rgb: 61, 93, 70;
+  --warning: #79551f;
+  --warning-rgb: 121, 85, 31;
+  --danger: #884139;
+  --danger-rgb: 136, 65, 57;
+  --proxy-only: #5a5182;
+  --proxy-only-rgb: 90, 81, 130;
+
+  --canvas: #eff2f3;
+  --surface: #f8f9f9;
+  --elevated: #ffffff;
+  --divider: #a4afb5;
+  --divider-rgb: 164, 175, 181;
+  --text-primary: #1c2327;
+  --text-primary-rgb: 28, 35, 39;
+  --text-secondary: #4d5960;
+  --text-secondary-rgb: 77, 89, 96;
+  --disabled: #7d888e;
+
+  --instrument-teal: #1f5c63;
+  --instrument-graphite: #0b1b26;
+  --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  --popover-shadow: 0 12px 32px rgba(15, 24, 30, 0.16);
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --accent: #a2b3bc;
+  --accent-rgb: 162, 179, 188;
+  --selection: #a9b0b3;
+  --selection-rgb: 169, 176, 179;
+  --success: #91ad98;
+  --success-rgb: 145, 173, 152;
+  --warning: #d0a562;
+  --warning-rgb: 208, 165, 98;
+  --danger: #d98c7d;
+  --danger-rgb: 217, 140, 125;
+  --proxy-only: #b3aad8;
+  --proxy-only-rgb: 179, 170, 216;
+
+  --canvas: #1b1e20;
+  --surface: #23272a;
+  --elevated: #2b3033;
+  --divider: #454c50;
+  --divider-rgb: 69, 76, 80;
+  --text-primary: #edf0f1;
+  --text-primary-rgb: 237, 240, 241;
+  --text-secondary: #adb4b8;
+  --text-secondary-rgb: 173, 180, 184;
+  --disabled: #747c80;
+
+  --instrument-teal: #1f5c63;
+  --instrument-graphite: #0b1b26;
+  --card-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  --popover-shadow: 0 14px 36px rgba(0, 0, 0, 0.48);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  background: var(--canvas);
+  color: var(--text-primary);
+  font-family: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei UI", system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+.selectable {
+  user-select: text;
+}
+
+.tabular-mono {
+  font-family: "Cascadia Mono", "Consolas", "SF Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(var(--divider-rgb), 0.45);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--divider-rgb), 0.75);
+}
+
+/* Instrument Hero Card Surface */
+.dial-instrument-surface {
+  position: relative;
+  border-radius: 22px;
+  background:
+    radial-gradient(200px circle at 50% 0%, rgba(255, 255, 255, 0.09), transparent 100%),
+    linear-gradient(135deg, var(--instrument-teal) 0%, var(--instrument-graphite) 100%);
+  border: 0.75px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 24px rgba(8, 18, 26, 0.24);
+  color: #ffffff;
+  overflow: hidden;
+}
+
+/* Hairline Divider */
+.xd-divider {
+  height: 1px;
+  background: rgba(var(--divider-rgb), 0.36);
+  width: 100%;
+}
+
+/* Inputs & Form Controls */
+.xd-input,
+.xd-select,
+.xd-textarea {
+  background: var(--canvas);
+  color: var(--text-primary);
+  border: 0.75px solid rgba(var(--divider-rgb), 0.65);
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.xd-input:focus,
+.xd-select:focus,
+.xd-textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.2);
+}
+
+.xd-textarea {
+  resize: vertical;
+  min-height: 68px;
+  line-height: 1.45;
+  user-select: text;
+}
+
+/* Compact Switch (26x15px in cards, 32x18px in settings) */
+.xd-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 30px;
+  height: 17px;
+  border-radius: 999px;
+  background: rgba(var(--divider-rgb), 0.55);
+  border: none;
+  cursor: pointer;
+  transition: background 0.16s ease;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.xd-switch.compact {
+  width: 26px;
+  height: 15px;
+}
+
+.xd-switch[data-checked="true"] {
+  background: var(--accent);
+}
+
+.xd-switch-thumb {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  transform: translateX(0);
+  transition: transform 0.16s ease;
+}
+
+.xd-switch.compact .xd-switch-thumb {
+  width: 11px;
+  height: 11px;
+}
+
+.xd-switch[data-checked="true"] .xd-switch-thumb {
+  transform: translateX(13px);
+}
+
+.xd-switch.compact[data-checked="true"] .xd-switch-thumb {
+  transform: translateX(11px);
+}
+
+.xd-switch:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Capsule & Action Buttons */
+.xd-capsule-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.09);
+  border: 0.75px solid rgba(var(--accent-rgb), 0.2);
+  cursor: pointer;
+  transition: background 0.14s ease, transform 0.1s ease;
+}
+
+.xd-capsule-btn:hover:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.15);
+}
+
+.xd-capsule-btn:active:not(:disabled) {
+  background: rgba(var(--accent-rgb), 0.22);
+}
+
+.xd-capsule-btn.primary {
+  background: var(--accent);
+  color: var(--canvas);
+  border-color: var(--accent);
+}
+
+.xd-capsule-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.xd-capsule-btn.danger {
+  color: var(--danger);
+  background: rgba(var(--danger-rgb), 0.1);
+  border-color: rgba(var(--danger-rgb), 0.28);
+}
+
+.xd-capsule-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.xd-icon-circle-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface);
+  border: 0.75px solid rgba(var(--divider-rgb), 0.45);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.xd-icon-circle-btn:hover {
+  background: var(--elevated);
+  color: var(--text-primary);
+}
+
+/* Collapsible Resource Card */
+.xd-card {
+  position: relative;
+  background: var(--surface);
+  border: 0.75px solid rgba(var(--divider-rgb), 0.55);
+  border-radius: 10px;
+  transition: border-color 0.15s ease, opacity 0.15s ease;
+}
+
+.xd-card.disabled-card {
+  opacity: 0.65;
+}
+
+.xd-card.active-scenario-card {
+  background: rgba(var(--selection-rgb), 0.13);
+  border-color: rgba(var(--selection-rgb), 0.55);
+}
+
+.xd-card.active-scenario-card::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 1.5px;
+  background: rgba(var(--selection-rgb), 0.9);
+}
+
+/* Segmented Control */
+.xd-segmented {
+  display: inline-flex;
+  background: rgba(var(--text-primary-rgb), 0.055);
+  border: 0.75px solid rgba(var(--divider-rgb), 0.45);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.xd-segmented button {
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.xd-segmented button[data-active="true"] {
+  background: var(--elevated);
+  color: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Warning / Status Gradient Rails */
+.xd-rail-warning {
+  background: linear-gradient(90deg, rgba(var(--warning-rgb), 0.09) 0%, rgba(var(--warning-rgb), 0.03) 100%);
+}
+.xd-rail-danger {
+  background: linear-gradient(90deg, rgba(var(--danger-rgb), 0.09) 0%, rgba(var(--danger-rgb), 0.03) 100%);
+}
+.xd-rail-proxy {
+  background: linear-gradient(90deg, rgba(var(--proxy-only-rgb), 0.12) 0%, rgba(var(--proxy-only-rgb), 0.04) 100%);
+}
+
+@keyframes xd-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.xd-spin {
+  animation: xd-spin 1.6s linear infinite;
+}

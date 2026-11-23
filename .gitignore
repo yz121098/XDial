@@ -20,3 +20,5 @@ macos/XDialStore.xcodeproj/
 
 # Generated for the exact linked Store release dependencies.
 /appletv/StoreResources/ThirdPartyNotices.txt
+windows/frontend/node_modules/
+windows/frontend/dist/

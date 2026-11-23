@@ -51,19 +51,59 @@ write_input_manifest() {
 	done < <(find "${sslcon_source_dir}" -type f -print | LC_ALL=C sort)
 }
 
+to_posix_path() {
+	local p="${1%$'\r'}"
+	if command -v cygpath >/dev/null 2>&1; then
+		cygpath -u "${p}"
+	else
+		printf '%s\n' "${p}"
+	fi
+}
+
+to_go_path() {
+	local p="${1%$'\r'}"
+	if command -v cygpath >/dev/null 2>&1; then
+		cygpath -m "${p}"
+	else
+		printf '%s\n' "${p}"
+	fi
+}
+
 atomic_exchange() {
 	local source_path="$1"
 	local destination_path="$2"
+	local python_bin=""
 
-	if ! command -v python3 >/dev/null 2>&1; then
-		echo "error: python3 is required to atomically replace ${destination_path}" >&2
+	if command -v python3 >/dev/null 2>&1 && python3 -c "import sys" >/dev/null 2>&1; then
+		python_bin="python3"
+	elif command -v python >/dev/null 2>&1 && python -c "import sys" >/dev/null 2>&1; then
+		python_bin="python"
+	else
+		echo "error: python3/python is required to atomically replace ${destination_path}" >&2
 		return 1
 	fi
 
-	python3 - "${source_path}" "${destination_path}" <<'PY'
+	"${python_bin}" - "$(to_go_path "${source_path}")" "$(to_go_path "${destination_path}")" <<'PY'
 import ctypes
 import os
 import sys
+
+if sys.platform == "win32":
+    src = sys.argv[1]
+    dst = sys.argv[2]
+    tmp = dst + ".swap_old"
+    if os.path.exists(tmp):
+        import shutil
+        shutil.rmtree(tmp)
+    os.rename(dst, tmp)
+    try:
+        os.rename(src, dst)
+        os.rename(tmp, src)
+    except Exception:
+        if not os.path.exists(dst) and os.path.exists(tmp):
+            os.rename(tmp, dst)
+        raise
+    raise SystemExit(0)
 
 source = os.fsencode(sys.argv[1])
 destination = os.fsencode(sys.argv[2])
@@ -126,6 +166,7 @@ actual_version="$(
 	cd "${repo_root}"
 	GOWORK=off GOFLAGS= go list -mod=readonly -m -f '{{.Version}}' "${module_path}"
 )"
+actual_version="${actual_version%$'\r'}"
 if [[ "${actual_version}" != "${expected_version}" ]]; then
 	echo "error: ${module_path} is ${actual_version}; patch expects ${expected_version}" >&2
 	echo "error: review the upstream fix before changing the pinned version" >&2
@@ -136,6 +177,7 @@ sing_box_actual_version="$(
 	cd "${repo_root}"
 	GOWORK=off GOFLAGS= go list -mod=readonly -m -f '{{.Version}}' "${sing_box_module_path}"
 )"
+sing_box_actual_version="${sing_box_actual_version%$'\r'}"
 if [[ "${sing_box_actual_version}" != "${sing_box_expected_version}" ]]; then
 	echo "error: ${sing_box_module_path} is ${sing_box_actual_version}; patch expects ${sing_box_expected_version}" >&2
 	echo "error: review the upstream fix before changing the pinned version" >&2
@@ -159,13 +201,13 @@ cp "${repo_root}/go.sum" "${staging_dir}/xdial.sum"
 # go.sum. Point it at the staging copy so preparing generated dependencies
 # never writes the repository's go.mod or go.sum.
 GOWORK=off GOFLAGS= go mod download \
-	-modfile="${staging_dir}/xdial.mod" \
+	-modfile="$(to_go_path "${staging_dir}/xdial.mod")" \
 	"${module_path}@${expected_version}"
 GOWORK=off GOFLAGS= go mod download \
-	-modfile="${staging_dir}/xdial.mod" \
+	-modfile="$(to_go_path "${staging_dir}/xdial.mod")" \
 	"${sing_box_module_path}@${sing_box_expected_version}"
 
-module_cache="$(GOWORK=off GOFLAGS= go env GOMODCACHE)"
+module_cache="$(to_posix_path "$(GOWORK=off GOFLAGS= go env GOMODCACHE)")"
 source_dir="${module_cache}/${module_path}@${expected_version}"
 if [[ ! -d "${source_dir}" ]]; then
 	echo "error: downloaded module directory not found: ${source_dir}" >&2
@@ -451,14 +493,14 @@ grep -Fq 'func TestXDialLateOldSessionCloseCannotClearNewSession(' \
 	"${patched_sslcon_dir}/session/xdial_liveness_test.go"
 
 GOWORK=off GOFLAGS= go mod edit \
-	-modfile="${staging_dir}/xdial.mod" \
-	-replace="${module_path}=${output_dir}/tailscale"
+	-modfile="$(to_go_path "${staging_dir}/xdial.mod")" \
+	-replace="${module_path}=$(to_go_path "${output_dir}/tailscale")"
 GOWORK=off GOFLAGS= go mod edit \
-	-modfile="${staging_dir}/xdial.mod" \
-	-replace="${sing_box_module_path}=${output_dir}/sing-box"
+	-modfile="$(to_go_path "${staging_dir}/xdial.mod")" \
+	-replace="${sing_box_module_path}=$(to_go_path "${output_dir}/sing-box")"
 GOWORK=off GOFLAGS= go mod edit \
-	-modfile="${staging_dir}/xdial.mod" \
-	-replace="sslcon=${output_dir}/sslcon"
+	-modfile="$(to_go_path "${staging_dir}/xdial.mod")" \
+	-replace="sslcon=$(to_go_path "${output_dir}/sslcon")"
 
 # gomobile overwrites GOFLAGS for each target architecture, so a -modfile
 # replacement is not inherited by the actual bind build. An explicit GOWORK
@@ -473,29 +515,29 @@ write_input_manifest > "${staging_dir}/${input_manifest_name}"
 # Resolve and validate the complete staged workspace before it can replace the
 # last known-good output. Both staging and final directories have the same
 # depth below the repository, so xdial.work's relative use paths remain valid.
-resolved_dir="$(
+resolved_dir="$(to_posix_path "$(
 	cd "${repo_root}"
-	GOWORK="${staging_dir}/xdial.work" GOFLAGS= \
+	GOWORK="$(to_go_path "${staging_dir}/xdial.work")" GOFLAGS= \
 		go list -m -f '{{.Dir}}' "${module_path}"
-)"
+)")"
 if [[ "${resolved_dir}" != "${staging_dir}/tailscale" ]]; then
 	echo "error: patched workspace resolved ${module_path} to ${resolved_dir}" >&2
 	exit 1
 fi
-resolved_sing_box_dir="$(
+resolved_sing_box_dir="$(to_posix_path "$(
 	cd "${repo_root}"
-	GOWORK="${staging_dir}/xdial.work" GOFLAGS= \
+	GOWORK="$(to_go_path "${staging_dir}/xdial.work")" GOFLAGS= \
 		go list -m -f '{{.Dir}}' "${sing_box_module_path}"
-)"
+)")"
 if [[ "${resolved_sing_box_dir}" != "${staging_dir}/sing-box" ]]; then
 	echo "error: patched workspace resolved ${sing_box_module_path} to ${resolved_sing_box_dir}" >&2
 	exit 1
 fi
-resolved_sslcon_dir="$(
+resolved_sslcon_dir="$(to_posix_path "$(
 	cd "${repo_root}"
-	GOWORK="${staging_dir}/xdial.work" GOFLAGS= \
+	GOWORK="$(to_go_path "${staging_dir}/xdial.work")" GOFLAGS= \
 		go list -m -f '{{.Dir}}' sslcon
-)"
+)")"
 if [[ "${resolved_sslcon_dir}" != "${staging_dir}/sslcon" ]]; then
 	echo "error: patched workspace resolved sslcon to ${resolved_sslcon_dir}" >&2
 	exit 1

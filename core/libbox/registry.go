@@ -53,6 +53,7 @@ func inboundRegistry() *inbound.Registry {
 	// socks inbound 是本地手测/调试用(经 SOCKS5 验证分流路由),
 	// 真机 NE 模式下不会出现在生成的配置里,体积负担可忽略。
 	socks.RegisterInbound(registry)
+	registerPlatformInbounds(registry)
 	return registry
 }
 
