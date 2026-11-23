@@ -302,6 +302,9 @@ func legacyTransparentProxyLineCapabilities(
 		return capabilities
 	}
 	activeLineIDs, _ := effectiveActiveTargetIDs(profile, scenario)
+	for vpnID := range effectiveActiveVPNLineIDs(profile, scenario) {
+		activeLineIDs[vpnID] = true
+	}
 	for lineID := range activeLineIDs {
 		if lineID == "" || lineID == builtinDirectLineID {
 			continue
@@ -434,13 +437,6 @@ func generateSingBox(
 	activeVPNIDs := effectiveActiveVPNLineIDs(profile, scenario)
 	activeTailscaleIDs := effectiveActiveTailscaleLineIDs(profile, scenario)
 	activeMagicDNSTags := effectiveActiveMagicDNSEndpointTags(profile, scenario)
-	// D30：sslcon 是包级单例，一个进程只能维持一条 AnyConnect 隧道，而所有 VPN
-	// 线路共享 "vpn" 这一个 outbound tag。两条不同的 active VPN 线路会让第二条的
-	// 流量静默钻进第一条的隧道（违反 Line 隔离）。所有平台一律硬校验报错，
-	// 不区分桌面/NE —— 桌面同样只有一份 VPNBridge。
-	if len(activeVPNIDs) > 1 {
-		return nil, fmt.Errorf("only one active AnyConnect line is supported: %d active lines would share one tunnel", len(activeVPNIDs))
-	}
 	// D33：所有 Tailscale Line 共享一份 node key/state，不能同时创建两个 endpoint
 	// 实例。未被 active Scenario 引用的 Line 不计入，也绝不能为了登录或探测进入数据面。
 	if len(activeTailscaleIDs) > 1 {
@@ -508,6 +504,14 @@ func generateSingBox(
 
 	for _, line := range profile.Lines {
 		if !activeLineIDs[line.ID] || !line.Enabled || line.Type == LineTypeDirect || line.Type == LineTypeVPN || line.Type == LineTypeTailscale {
+			continue
+		}
+		if line.Type == LineTypeChain {
+			chain, err := buildChainOutbounds(profile, &line)
+			if err != nil {
+				return nil, err
+			}
+			outbounds = append(outbounds, chain...)
 			continue
 		}
 		ob := buildProxyOutbound(&line)
@@ -780,6 +784,21 @@ func generateSingBox(
 		)
 	}
 
+	// Packet-tunnel ingress (also used by Windows) normally has a mobile DNS
+	// dispatcher. An entry VPN is not the DNS owner for the exit of a chain.
+	if !platform.isTransparentProxy() {
+		for _, line := range profile.Lines {
+			if line.Type == LineTypeChain && activeLineIDs[line.ID] && line.Enabled {
+				configureChainDNS(dnsConfig, platform, profile, scenario, subTagMap, validTags, defaultTag, activeMagicDNSTags)
+				if platform == PlatformMacOS {
+					if err := configureDesktopChainBootstrap(outbounds, dnsConfig, enterpriseDNS); err != nil {
+						return nil, err
+					}
+				}
+				break
+			}
+		}
+	}
 	if platform == PlatformNE && systemDNS != nil {
 		primary, err := validateTransparentProxySystemDNS(systemDNS)
 		if err != nil {
@@ -872,11 +891,10 @@ func effectiveActiveTargetIDs(profile *Profile, scenario *Scenario) (map[string]
 	lineIDs := make(map[string]bool)
 	subscriptionIDs := make(map[string]bool)
 	addTarget := func(lineID, subscriptionID string) {
-		if lineID != "" {
-			lineIDs[lineID] = true
-		}
 		if subscriptionID != "" {
 			subscriptionIDs[subscriptionID] = true
+		} else if lineID != "" {
+			lineIDs[lineID] = true
 		}
 	}
 
@@ -984,6 +1002,9 @@ func effectiveActiveVPNLineIDs(profile *Profile, scenario *Scenario) map[string]
 	ids := make(map[string]bool)
 	for lineID := range activeLineIDs {
 		line := profile.FindLine(lineID)
+		if line != nil && line.Enabled && line.Type == LineTypeChain && len(line.GroupMembers) > 0 {
+			line = profile.FindLine(line.GroupMembers[0])
+		}
 		if line != nil && line.Enabled && line.Type == LineTypeVPN {
 			ids[line.ID] = true
 		}
@@ -1462,17 +1483,6 @@ func buildTransparentProxyDNS(
 		}
 		resolverTag := transparentProxyResolverTag(ruleSet, outTag)
 		switch ruleSet.Type {
-		case RuleSetTypeNative:
-			if !nativeRuleDomainOnly(ruleSet.NativeRule) {
-				continue
-			}
-			ensureResolver(resolverTag, outTag, strategy)
-			rule := map[string]interface{}{"rule_set": sbRuleSetTag(ruleSet), "server": resolverTag}
-			applyRuleSetInvert(rule, ruleSet)
-			if strategy != "" {
-				rule["strategy"] = strategy
-			}
-			rules = append(rules, rule)
 		case RuleSetTypeApplication:
 			selectors := applicationRuleSetSelectors(ruleSet)
 			if len(selectors) == 0 {
@@ -1496,33 +1506,16 @@ func buildTransparentProxyDNS(
 			}
 			applyRuleSetInvert(rule, ruleSet)
 			rules = append(rules, rule)
-		case RuleSetTypeManual:
-			if len(ruleSet.Domains) > 0 && (!ruleSet.Invert || len(ruleSet.CIDRs) == 0) {
-				ensureResolver(resolverTag, outTag, strategy)
-				rule := map[string]interface{}{
-					"domain_suffix": ruleSet.Domains,
-					"server":        resolverTag,
-				}
-				if strategy != "" {
-					rule["strategy"] = strategy
-				}
-				applyRuleSetInvert(rule, ruleSet)
-				rules = append(rules, rule)
-			}
-		case RuleSetTypeURL:
-			if ruleSet.RuntimeMatchKind != RuleSetMatchDomain {
-				// IP 与无法安全拆分的混合规则不参与名字阶段的分域。
+		default:
+			rule := scenarioDomainDNSMatch(ruleSet)
+			if rule == nil {
 				continue
 			}
 			ensureResolver(resolverTag, outTag, strategy)
-			rule := map[string]interface{}{
-				"rule_set": sbRuleSetTag(ruleSet),
-				"server":   resolverTag,
-			}
+			rule["server"] = resolverTag
 			if strategy != "" {
 				rule["strategy"] = strategy
 			}
-			applyRuleSetInvert(rule, ruleSet)
 			rules = append(rules, rule)
 		}
 	}
@@ -3100,6 +3093,9 @@ func validAnyTLSOptions(line *Line) bool {
 func configureTransparentProxyEndpointBootstrap(outbounds []map[string]interface{}) bool {
 	needed := false
 	for _, outbound := range outbounds {
+		if outbound["detour"] != nil {
+			continue // the preceding hop owns this endpoint lookup
+		}
 		outboundType, _ := outbound["type"].(string)
 		switch outboundType {
 		case "trojan", "shadowsocks", "vmess", "vless", "anytls":

@@ -126,6 +126,7 @@ type AppSnapshot struct {
 	DownloadBps        *float64                 `json:"download_bps,omitempty"`
 	UploadBps          *float64                 `json:"upload_bps,omitempty"`
 	ConfigDirty        bool                     `json:"config_dirty"`
+	SignInLineID       string                   `json:"sign_in_line_id,omitempty"`
 	NeedsSignIn        bool                     `json:"needs_sign_in"`
 	FreshUnconfigured  bool                     `json:"fresh_unconfigured"`
 	BlockerMessage     string                   `json:"blocker_message,omitempty"`
@@ -452,6 +453,7 @@ func (m *Manager) buildSnapshotLocked() AppSnapshot {
 	prof, editor := m.buildEditorViewLocked()
 
 	configDirty := false
+	var signInLineID string
 	needsSignIn := false
 	freshUnconfigured := false
 	blocker := ""
@@ -472,6 +474,7 @@ func (m *Manager) buildSnapshotLocked() AppSnapshot {
 		// uses an AnyConnect VPN line whose credentials or server are incomplete,
 		// surface NeedsSignIn instead of a generic configuration error rail.
 		if vpnLine := prof.ActiveVPNLine(); vpnLine != nil {
+			signInLineID = vpnLine.ID
 			if strings.TrimSpace(vpnLine.VPNServer) == "" ||
 				strings.TrimSpace(vpnLine.VPNUsername) == "" ||
 				vpnLine.VPNPassword == "" {
@@ -578,6 +581,7 @@ func (m *Manager) buildSnapshotLocked() AppSnapshot {
 		DownloadBps:        m.downloadBps,
 		UploadBps:          m.uploadBps,
 		ConfigDirty:        configDirty,
+		SignInLineID:       signInLineID,
 		NeedsSignIn:        needsSignIn,
 		FreshUnconfigured:  freshUnconfigured,
 		BlockerMessage:     blocker,
@@ -1123,15 +1127,8 @@ func selectPreferredVPNScenarioID(prof *config.Profile, vpnLineID string) string
 		return ""
 	}
 	scenarioUsesVPN := func(sc config.Scenario) bool {
-		if sc.DefaultLineID == vpnLineID {
-			return true
-		}
-		for _, b := range sc.Bindings {
-			if b.LineID == vpnLineID {
-				return true
-			}
-		}
-		return false
+		line := prof.ScenarioVPNLine(&sc)
+		return line != nil && line.ID == vpnLineID
 	}
 	// If current active scenario already uses this VPN line, keep it!
 	if cur := prof.ActiveScenario(); cur != nil && scenarioUsesVPN(*cur) {
@@ -2136,8 +2133,8 @@ func (m *Manager) SaveLineGroup(group config.Line) error {
 	if group.Name == "" {
 		return fmt.Errorf("线路组名称不能为空")
 	}
-	if group.Type != config.LineTypeSelector && group.Type != config.LineTypeURLTest {
-		group.Type = config.LineTypeURLTest
+	if !group.IsGroup() {
+		return fmt.Errorf("不支持的线路组类型")
 	}
 	group.Enabled = true
 	m.mu.Lock()
@@ -2427,7 +2424,7 @@ func (m *Manager) TestBatchLatency(lineIDs []string) error {
 		if l == nil {
 			return
 		}
-		if l.IsGroup() {
+		if l.IsGroup() && l.Type != config.LineTypeChain {
 			for _, child := range l.GroupMembers {
 				collect(child)
 			}

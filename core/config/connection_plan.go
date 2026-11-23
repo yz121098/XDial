@@ -118,17 +118,30 @@ func BuildConnectionPlan(profile *Profile) (*ConnectionPlan, error) {
 		ruleTaskIDs = appendUniqueString(ruleTaskIDs, taskID)
 		fingerprint.includeRuleSet(ruleSet)
 	}
-	addLine := func(line *Line) (string, string, runtimeConfigurationTarget, bool) {
+	var addLine func(*Line) (string, string, runtimeConfigurationTarget, bool)
+	addLine = func(line *Line) (string, string, runtimeConfigurationTarget, bool) {
 		if line == nil || !line.Enabled || !lineHasUsableOutbound(line) {
 			return "", "", runtimeConfigurationTarget{}, false
 		}
 		taskID := "line:" + line.ID
 		preparation := "start-with-data-plane"
 		detail := string(line.Type)
+		dependencies := []string{"underlay:system"}
 		switch line.Type {
 		case LineTypeDirect:
 			preparation = "inherit-underlay"
 			detail = "沿用启动前系统基础网络"
+		case LineTypeChain:
+			var names []string
+			for _, id := range line.GroupMembers {
+				hop := profile.FindLine(id) // validated by inspectScenarioReferences
+				names = append(names, lineLabel(hop))
+				if hop.Type == LineTypeVPN {
+					vpnTask, _, _, _ := addLine(hop)
+					dependencies = []string{vpnTask}
+				}
+			}
+			detail = strings.Join(names, " → ")
 		case LineTypeVPN:
 			preparation = "connect-and-probe"
 			detail = "建立 AnyConnect 会话并等待就绪"
@@ -146,7 +159,7 @@ func BuildConnectionPlan(profile *Profile) (*ConnectionPlan, error) {
 			Name:         lineLabel(line),
 			Detail:       detail,
 			Preparation:  preparation,
-			Dependencies: []string{"underlay:system"},
+			Dependencies: dependencies,
 			ResourceID:   line.ID,
 			ResourceType: string(line.Type),
 		})

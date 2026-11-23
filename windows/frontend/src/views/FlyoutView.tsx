@@ -151,7 +151,7 @@ export const FlyoutView: React.FC<{ snap: AppSnapshot }> = ({ snap }) => {
     snap.editor.scenarios[0];
 
   const activeVpnLine = snap.editor.all_lines.find(
-    (l) => l.type === "vpn" && l.enabled
+    (l) => l.type === "vpn" && l.enabled && (!snap.sign_in_line_id || l.id === snap.sign_in_line_id)
   );
 
   const runAction = async (fn: () => Promise<unknown>) => {

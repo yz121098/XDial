@@ -892,6 +892,20 @@ func lineRuntimeIdentity(
 	}
 	material := lineRuntimeIdentityMaterial{Type: line.Type, ProfileID: identityProfileID, NativeOptions: line.NativeOptions}
 	switch line.Type {
+	case config.LineTypeChain:
+		var hops []string
+		for _, id := range line.GroupMembers {
+			hop := profile.FindLine(id)
+			if hop == nil || hop.IsGroup() {
+				return "", fmt.Errorf("invalid proxy chain member %q", id)
+			}
+			identity, err := lineRuntimeIdentity(profile, hop)
+			if err != nil {
+				return "", err
+			}
+			hops = append(hops, identity)
+		}
+		material.Configuration = hops
 	case config.LineTypeSelector, config.LineTypeURLTest:
 		material.Configuration = config.GroupLineOutbounds(profile, line.ID)
 	case config.LineTypeDirect:

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { rpc } from "../../api/bridge";
 import type { AppSnapshot, Line, LineType } from "../../types";
+import { ChainEditor } from "../../components/ChainEditor";
 import { LatencyBadge } from "../../components/LatencyBadge";
 import { lineTypeBadge } from "../../utils/format";
 
@@ -978,9 +979,10 @@ export const LineGroupsTab: React.FC<{
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [addingMemberFor, setAddingMemberFor] = useState<string | null>(null);
 
+  const [editingChain, setEditingChain] = useState<Line | null>(null);
   const groups = snap.editor.line_groups;
   const candidatePool = snap.editor.all_lines.filter(
-    (l) => l.id !== "direct" && l.type !== "vpn" && l.type !== "tailscale" && l.enabled
+    (l) => l.type !== "chain" && l.id !== "direct" && l.type !== "vpn" && l.type !== "tailscale" && l.enabled
   );
 
   const exec = async (fn: () => Promise<unknown>) => {
@@ -1004,7 +1006,14 @@ export const LineGroupsTab: React.FC<{
           gap: 8,
         }}
       >
-        {groups.length === 0 && (
+        {editingChain && (
+          <ChainEditor key={editingChain.id} chain={editingChain} lines={snap.editor.all_lines} en={en}
+            onCancel={() => setEditingChain(null)} onSave={(updated) => exec(async () => {
+              await rpc("saveLineGroup", updated);
+              setEditingChain(null);
+            })} />
+        )}
+        {groups.length === 0 && !editingChain && (
           <div style={{ padding: 28, textAlign: "center", color: "var(--text-secondary)" }}>
             {en
               ? "No line groups yet. Create a group to auto-select fastest nodes or switch manually."
@@ -1013,6 +1022,22 @@ export const LineGroupsTab: React.FC<{
         )}
 
         {groups.map((grp) => {
+          if (grp.type === "chain") {
+            if (editingChain?.id === grp.id) return null;
+            const path = (grp.group_members || []).map((id) => snap.editor.all_lines.find(l => l.id === id)?.name || id).join(" → ");
+            return <div key={grp.id} className="xd-card" style={{ padding: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Link2 size={14} /><strong style={{ flex: 1 }}>{grp.name}</strong>
+                <LatencyBadge lineId={grp.id} lineType="chain" lang={lang} record={snap.latencies[grp.id]}
+                  isConnected={snap.phase === "connected" && snap.active_lines?.some(l => l.id === grp.id)}
+                  onTest={(id) => void exec(() => rpc("testBatchLatency", { ids: [id] }))} />
+                <button className="xd-capsule-btn" onClick={() => setEditingChain(grp)}>{en ? "Edit chain" : "编辑链路"}</button>
+                <button className="xd-capsule-btn" aria-label={en ? "Delete chain" : "删除链路"}
+                  onClick={() => void exec(() => rpc("deleteLineGroup", { id: grp.id }))}><Trash2 size={13} /></button>
+              </div>
+              <small>{path} ({en ? "exit" : "出口"})</small>
+            </div>;
+          }
           const isOpen = Boolean(expanded[grp.id]);
           const members = grp.group_members || [];
           const isAuto = grp.type === "urltest";
@@ -1261,6 +1286,9 @@ export const LineGroupsTab: React.FC<{
           justifyContent: "flex-end",
         }}
       >
+        <button className="xd-capsule-btn" style={{ marginRight: 8 }} onClick={() => {
+          setEditingChain({ id: "", type: "chain", enabled: true, name: en ? "Home chain" : "在家链路", group_members: ["", ""] });
+        }}><Link2 size={13} />{en ? "Add proxy chain" : "添加链式代理"}</button>
         <button
           className="xd-capsule-btn"
           disabled={candidatePool.length === 0}

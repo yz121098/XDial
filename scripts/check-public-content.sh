@@ -61,6 +61,7 @@ while IFS= read -r match; do
   path="${match%%:*}"
   numbered="${match#*:}"
   content="${numbered#*:}"
+  content="${content%$'\r'}" # git grep may read a CRLF working tree
   if [[ "$path" == core/config/subscription_profile.go && "$content" == "$allowed_geo_declaration" ]] ||
      [[ "$path" == macos/Sources/XDial/ProfileManagementView.swift && "$content" == "$allowed_geo_disclosure" ]]; then
     continue

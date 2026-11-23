@@ -11,6 +11,7 @@ export type IngressMode = "system-proxy" | "wintun" | "local-socks";
 export type LineType =
   | "direct"
   | "selector"
+  | "chain"
   | "urltest"
   | "vpn"
   | "trojan"
@@ -241,6 +242,7 @@ export interface AppSnapshot {
   upload_bps?: number;
   config_dirty: boolean;
   needs_sign_in: boolean;
+  sign_in_line_id?: string;
   fresh_unconfigured: boolean;
   blocker_message?: string;
   auto_reason?: string;

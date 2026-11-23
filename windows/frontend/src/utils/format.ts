@@ -36,6 +36,7 @@ export function lineTypeBadge(type: string, lang: "zh-CN" | "en" = "zh-CN"): str
     anytls: "AnyTLS",
     selector: "手动选线",
     urltest: "自动测速",
+    chain: "链式代理",
   };
   const en: Record<string, string> = {
     direct: "Direct",
@@ -48,6 +49,7 @@ export function lineTypeBadge(type: string, lang: "zh-CN" | "en" = "zh-CN"): str
     anytls: "AnyTLS",
     selector: "Selector",
     urltest: "Auto URLTest",
+    chain: "Proxy Chain",
   };
   return (lang === "en" ? en[type] : zh[type]) || type;
 }

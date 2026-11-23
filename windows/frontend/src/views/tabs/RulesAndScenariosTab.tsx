@@ -384,7 +384,7 @@ const RuleEditorForm: React.FC<{
               >
                 <option value="direct">{en ? "Direct" : "直连"}</option>
                 {allLines
-                  .filter((l) => l.id !== "direct" && !l.type.includes("vpn") && l.enabled)
+                  .filter((l) => l.id !== "direct" && l.type !== "vpn" && l.type !== "chain" && l.enabled)
                   .map((l) => (
                     <option key={l.id} value={l.id}>
                       {l.name}

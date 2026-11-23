@@ -53,6 +53,12 @@ TUN、系统代理、系统 DNS、默认路由或持久状态；不启动未连�
 
 ## 3. 平台接入与 Line
 
+链式代理是可由 Scenario 绑定的有序线路组（`type: chain`）。`group_members` 从入口到出口，
+至少两条不同线路；AnyConnect 只能在第一跳，其他跳为普通代理。不嵌套线路组或 Tailscale。
+编译时为链内代理生成专属 outbound，后跳的 sing-box `detour` 指向前跳，端点域名也交给前跳；
+最后一跳持有整条链的出口 tag。单独绑定相同节点不改变其拨号路径。链中 AnyConnect 计入活动场景的单例检查，
+缺少或禁用的跳点不能被省略或回退直连。独立测速不启动链路或 VPN 身份。
+
 ### 3.1 macOS 与 Underlay（D31–D35、D-UNDERLAY、D-INGRESS）
 
 macOS 主入口为 `NETransparentProxyProvider`，以随机凭据保护的回环 SOCKS 将 TCP/UDP

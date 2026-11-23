@@ -192,6 +192,11 @@ func ImportProfileDocument(data []byte, namespace string) (*Profile, error) {
 		line := original
 		line.IdentityProfileID, line.IdentityHostname = "", ""
 		line.ID = tags[original.ID]
+		if line.Type == LineTypeChain {
+			for i, member := range line.GroupMembers {
+				line.GroupMembers[i] = tags[member]
+			}
+		}
 		profile.Lines = append(profile.Lines, line)
 	}
 	ruleTags := map[string]string{}
@@ -542,7 +547,7 @@ func validateDocumentProfileWithEmptyGroups(profile *Profile, allowEmpty bool) e
 		seen[line.ID], lines[line.ID] = true, true
 		switch line.Type {
 		case LineTypeDirect, LineTypeVPN, LineTypeTailscale, LineTypeTrojan, LineTypeShadowsocks, LineTypeVMess, LineTypeVLESS, LineTypeAnyTLS:
-		case LineTypeSelector, LineTypeURLTest:
+		case LineTypeSelector, LineTypeURLTest, LineTypeChain:
 			if err := validateGroupReferences(profile, line, false, allowEmpty); err != nil {
 				return err
 			}
@@ -562,6 +567,9 @@ func validateDocumentProfileWithEmptyGroups(profile *Profile, allowEmpty bool) e
 				return err
 			}
 		case RuleSetTypeURL:
+			if l := profile.FindLine(rule.FetchLineID); l != nil && l.Type == LineTypeChain {
+				return fmt.Errorf("proxy chains are traffic targets, not rule set download lines")
+			}
 			if rule.FetchLineID != "" && !lines[rule.FetchLineID] {
 				return fmt.Errorf("rule set references a missing download line")
 			}

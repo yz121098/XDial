@@ -95,6 +95,13 @@ func CollectProfileWarnings(profile *Profile) ([]ProfileWarning, error) {
 // inspectScenarioReferences 是 INV6 的唯一实现点：generateSingBox 与
 // CollectProfileWarnings 都走它，保证"能不能生成"和"为什么某条没生效"的判定一致。
 func inspectScenarioReferences(profile *Profile, scenario *Scenario) ([]ProfileWarning, error) {
+	// D30：sslcon 是包级单例，一个进程只能维持一条 AnyConnect 隧道，而所有 VPN
+	// 线路共享 "vpn" 这一个 outbound tag。两条不同的 active VPN 线路会让第二条的
+	// 流量静默钻进第一条的隧道（违反 Line 隔离）。所有平台一律硬校验报错，
+	// 不区分桌面/NE —— 桌面同样只有一份 VPNBridge。
+	if activeVPNIDs := effectiveActiveVPNLineIDs(profile, scenario); len(activeVPNIDs) > 1 {
+		return nil, fmt.Errorf("only one active AnyConnect line is supported: %d active lines would share one tunnel", len(activeVPNIDs))
+	}
 	var warnings []ProfileWarning
 	active, _ := effectiveActiveTargetIDs(profile, scenario)
 	for id := range active {
@@ -188,6 +195,9 @@ func inspectScenarioReferences(profile *Profile, scenario *Scenario) ([]ProfileW
 						ruleSet.ID,
 						ruleSet.FetchLineID,
 					)
+				}
+				if fetchLine.Type == LineTypeChain {
+					return nil, fmt.Errorf("proxy chains are traffic targets, not rule set download lines")
 				}
 				if !fetchLine.Enabled || !lineHasUsableOutbound(fetchLine) {
 					return nil, fmt.Errorf(
@@ -373,6 +383,8 @@ func canonicalApplicationBundlePath(raw string) (string, bool) {
 // 不能把缺失 outbound 降为 warning。
 func lineHasUsableOutbound(line *Line) bool {
 	switch line.Type {
+	case LineTypeChain:
+		return len(line.GroupMembers) >= 2 // member usability is checked with the Profile
 	case LineTypeDirect, LineTypeVPN, LineTypeTailscale:
 		return true
 	default:

@@ -10,6 +10,7 @@ type LineType string
 const (
 	LineTypeDirect      LineType = "direct"
 	LineTypeSelector    LineType = "selector"
+	LineTypeChain       LineType = "chain" // group_members are ordered from entry to exit
 	LineTypeURLTest     LineType = "urltest"
 	LineTypeVPN         LineType = "vpn"
 	LineTypeTrojan      LineType = "trojan"
@@ -339,19 +340,19 @@ func (p *Profile) VPNLine() *Line {
 
 // ActiveVPNLine 返回活动场景实际引用的 VPN 线路。
 func (p *Profile) ActiveVPNLine() *Line {
-	scenario := p.ActiveScenario()
+	return p.ScenarioVPNLine(p.ActiveScenario())
+}
+
+// ScenarioVPNLine includes the transport of an active chain, not dormant lines.
+func (p *Profile) ScenarioVPNLine(scenario *Scenario) *Line {
 	if scenario == nil {
 		return nil
 	}
-	for _, binding := range scenario.Bindings {
-		line := p.FindLine(binding.LineID)
-		if line != nil && line.Enabled && line.Type == LineTypeVPN {
-			return line
+	ids := effectiveActiveVPNLineIDs(p, scenario)
+	for i := range p.Lines {
+		if ids[p.Lines[i].ID] {
+			return &p.Lines[i]
 		}
-	}
-	line := p.FindLine(scenario.DefaultLineID)
-	if line != nil && line.Enabled && line.Type == LineTypeVPN {
-		return line
 	}
 	return nil
 }

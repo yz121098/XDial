@@ -64,7 +64,7 @@ func libraryStrings(v libraryObject, key string) []string {
 }
 func libraryGroup(v libraryObject) bool {
 	t := libraryString(v, "type")
-	return t == string(LineTypeSelector) || t == string(LineTypeURLTest)
+	return t == string(LineTypeSelector) || t == string(LineTypeURLTest) || t == string(LineTypeChain)
 }
 func copyLibraryObject(v libraryObject) libraryObject {
 	r := libraryObject{}
@@ -412,7 +412,7 @@ func (l *profileLibrary) addTemplates(r libraryRecord, rename bool) {
 		if libraryGroup(g) {
 			l.Groups = append(l.Groups, g)
 			id := libraryString(g, "id")
-			l.GroupSources[id] = libraryGroupSource{ProfileID: r.ID, GroupID: id, FollowsMembers: len(r.Source) > 0 && string(r.Source) != "null", SourceMembers: libraryStrings(g, "group_members")}
+			l.GroupSources[id] = libraryGroupSource{ProfileID: r.ID, GroupID: id, FollowsMembers: libraryString(g, "type") != string(LineTypeChain) && len(r.Source) > 0 && string(r.Source) != "null", SourceMembers: libraryStrings(g, "group_members")}
 		}
 	}
 	scenes := libraryObjects(r.Profile, "scenarios")

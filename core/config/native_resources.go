@@ -11,7 +11,7 @@ import (
 )
 
 func (line *Line) IsGroup() bool {
-	return line != nil && (line.Type == LineTypeSelector || line.Type == LineTypeURLTest)
+	return line != nil && (line.Type == LineTypeSelector || line.Type == LineTypeURLTest || line.Type == LineTypeChain)
 }
 
 // Native rules remain sing-box expressions. This only classifies whether the
@@ -88,6 +88,12 @@ func validateGroupReferences(profile *Profile, line *Line, requireUsable bool, a
 		if depth > 32 || visiting[item.ID] {
 			return fmt.Errorf("line group dependency cycle or excessive nesting")
 		}
+		if item.Type == LineTypeChain {
+			if depth != 0 {
+				return fmt.Errorf("proxy chain %q must be bound directly to a Scenario", item.ID)
+			}
+			return validateProxyChain(profile, item, requireUsable)
+		}
 		if !item.IsGroup() {
 			if item.Type == LineTypeVPN || item.Type == LineTypeTailscale {
 				return fmt.Errorf("AnyConnect and Tailscale must be bound directly to a Scenario")
@@ -137,7 +143,7 @@ func expandGroupLineIDs(profile *Profile, ids map[string]bool) {
 		}
 		seen[id] = true
 		line := profile.FindLine(id)
-		if !line.IsGroup() {
+		if !line.IsGroup() || line.Type == LineTypeChain {
 			return
 		}
 		for _, member := range line.GroupMembers {

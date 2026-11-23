@@ -410,3 +410,46 @@ func TestImportVLESSShareURIAsLineAndAsProfile(t *testing.T) {
 		t.Fatalf("expected profile source named 'gcp-us Reality', got: %+v", snap.Editor.Sources)
 	}
 }
+
+func TestManagerHomeProxyChain(t *testing.T) {
+	st, err := store.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(st, "test", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Shutdown()
+	for _, line := range []config.Line{
+		{ID: "other-vpn", Name: "Other", Type: config.LineTypeVPN, Enabled: true},
+		{ID: "home-vpn", Name: "Home VPN", Type: config.LineTypeVPN, Enabled: true},
+		{ID: "exit", Name: "Exit", Type: config.LineTypeVLESS, Enabled: true, VLESSUUID: "00000000-0000-4000-8000-000000000001", VLESSServer: "exit.internal", VLESSPort: 443},
+	} {
+		if err = m.SaveLine(line); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = m.SaveLineGroup(config.Line{ID: "chain", Name: "Home chain", Type: config.LineTypeChain, GroupMembers: []string{"home-vpn", "exit"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.SaveScenario(config.Scenario{ID: "home", Name: "Home", DefaultLineID: "chain"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = m.SelectScenario("home"); err != nil {
+		t.Fatal(err)
+	}
+	s := m.GetSnapshot()
+	if !s.NeedsSignIn || s.SignInLineID != "home-vpn" || len(s.Editor.LineGroups) != 1 || s.Editor.LineGroups[0].Type != config.LineTypeChain {
+		t.Fatalf("incorrect home projection: sign-in=%q groups=%v", s.SignInLineID, s.Editor.LineGroups)
+	}
+	m.mu.Lock()
+	p, _ := m.buildEditorViewLocked()
+	m.mu.Unlock()
+	if selectPreferredVPNScenarioID(p, "home-vpn") != "home" {
+		t.Fatal("sign-in switches away from chain scenario")
+	}
+	if err = m.DeleteLine("exit"); err == nil {
+		t.Fatal("removed a required hop")
+	}
+}

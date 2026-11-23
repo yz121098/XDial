@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kafeifei/xdial/core/config"
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/certificate"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -27,9 +29,12 @@ import (
 	boxservice "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/direct"
+	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/protocol/vless"
 	"github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	"github.com/things-go/go-socks5"
 )
 
 func TestOutboundRegistryIncludesVLESSAndRedactsSecrets(t *testing.T) {
@@ -94,17 +99,19 @@ func TestVLESSRealityLoopbackHandshakeAndTraffic(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		curves []tls.CurveID
+		chain  bool
 	}{
 		{name: "post-quantum-x25519mlkem768", curves: []tls.CurveID{tls.X25519MLKEM768, tls.X25519}},
 		{name: "classic-x25519-only", curves: []tls.CurveID{tls.X25519}},
+		{name: "proxy-chain", curves: []tls.CurveID{tls.X25519}, chain: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runVLESSRealityLoopbackHandshakeAndTraffic(t, tc.curves)
+			runVLESSRealityLoopbackHandshakeAndTraffic(t, tc.curves, tc.chain)
 		})
 	}
 }
 
-func runVLESSRealityLoopbackHandshakeAndTraffic(t *testing.T, curves []tls.CurveID) {
+func runVLESSRealityLoopbackHandshakeAndTraffic(t *testing.T, curves []tls.CurveID, chain bool) {
 	// 1. Local TLS 1.3 camouflage target for Reality server handshake borrowing.
 	camouflage := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -213,20 +220,54 @@ func runVLESSRealityLoopbackHandshakeAndTraffic(t *testing.T, curves []tls.Curve
 		VLESSRealityShortID:    shortID,
 		UDP:                    true,
 	}
-	outboundMap := config.LineOutbound(&line)
-	if outboundMap == nil {
-		t.Fatal("LineOutbound returned nil for valid VLESS + Reality line")
+	clientCtx := boxContext(context.Background())
+	profile := &config.Profile{Lines: []config.Line{line}, Scenarios: []config.Scenario{{ID: "test", DefaultLineID: line.ID}}, ActiveScenarioID: "test"}
+	var unavailableCtx context.Context
+	var disconnectedDoc []byte
+	var bridgePort int
+	if chain {
+		profile.Lines = append(profile.Lines, config.Line{ID: "entry", Type: config.LineTypeVPN, Enabled: true}, config.Line{ID: "chain", Type: config.LineTypeChain, Enabled: true, GroupMembers: []string{"entry", line.ID}})
+		profile.Scenarios[0].DefaultLineID = "chain"
+		// The real Windows/in-process VPN outbound must not bypass an offline
+		// bridge even though the Reality server is directly reachable here.
+		disconnectedDoc, err = config.GenerateSingBoxFor(profile, 0, "", config.PlatformNE, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		unavailableCtx = service.ContextWith(boxContext(context.Background()), &anyConnectLineRuntime{})
+
+		// Loopback stand-in for the desktop VPN SOCKS bridge. Only it can map
+		// the test endpoint to Reality. It must never receive the HTTP target.
+		ln, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		bridgePort = ln.Addr().(*net.TCPAddr).Port
+		profile.Lines[0].VLESSServer = "192.0.2.33"
+		server := socks5.NewServer(socks5.WithDial(func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr != net.JoinHostPort("192.0.2.33", strconv.Itoa(vlessPort)) {
+				return nil, fmt.Errorf("unexpected bridge destination: %s", addr)
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort("127.0.0.1", strconv.Itoa(vlessPort)))
+		}))
+		go server.Serve(ln)
+		socks.RegisterOutbound(service.FromContext[adapter.OutboundRegistry](clientCtx).(*outbound.Registry))
 	}
-	clientDoc, err := json.Marshal(map[string]interface{}{
-		"log":       map[string]interface{}{"disabled": true},
-		"outbounds": []interface{}{outboundMap},
-		"route":     map[string]interface{}{"final": "proxy-loopback-reality"},
-	})
+	// Only take the generated outbounds/final: no system ingress in the test.
+	data, err := config.GenerateSingBox(profile, bridgePort, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	clientCtx := boxContext(context.Background())
+	var generated config.SingBoxConfig
+	if err = json.Unmarshal(data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	final := generated.Route["final"].(string)
+	clientDoc, err := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "outbounds": generated.Outbounds, "route": map[string]any{"final": final}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	clientOpts, err := json.UnmarshalExtendedContext[option.Options](clientCtx, clientDoc)
 	if err != nil {
 		t.Fatalf("unmarshal client options: %v", err)
@@ -241,9 +282,9 @@ func runVLESSRealityLoopbackHandshakeAndTraffic(t *testing.T, curves []tls.Curve
 	}
 	defer clientBox.Close()
 
-	proxyOutbound, loaded := clientBox.Outbound().Outbound("proxy-loopback-reality")
+	proxyOutbound, loaded := clientBox.Outbound().Outbound(final)
 	if !loaded {
-		t.Fatal("proxy-loopback-reality outbound not loaded")
+		t.Fatalf("outbound %q not loaded", final)
 	}
 
 	httpClient := &http.Client{
@@ -266,5 +307,34 @@ func runVLESSRealityLoopbackHandshakeAndTraffic(t *testing.T, curves []tls.Curve
 	}
 	if string(body) != "vless-reality-ok" {
 		t.Fatalf("body = %q, want %q", string(body), "vless-reality-ok")
+	}
+	if chain {
+		opts, err := json.UnmarshalExtendedContext[option.Options](unavailableCtx, disconnectedDoc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts.Inbounds = nil
+		opts.Experimental = nil
+		instance, err := box.New(box.Options{Context: unavailableCtx, Options: opts})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer instance.Close()
+		if err = instance.Start(); err != nil {
+			t.Fatal(err)
+		}
+		exit, ok := instance.Outbound().Outbound(final)
+		if !ok {
+			t.Fatal("missing chain")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		conn, err := exit.DialContext(ctx, "tcp", M.ParseSocksaddr(target.Listener.Addr().String()))
+		if conn != nil {
+			conn.Close()
+		}
+		if !errors.Is(err, errAnyConnectLineUnavailable) {
+			t.Fatalf("offline AnyConnect must fail closed: %v", err)
+		}
 	}
 }

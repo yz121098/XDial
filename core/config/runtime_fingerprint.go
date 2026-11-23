@@ -189,6 +189,8 @@ func (builder *runtimeConfigurationBuilder) includeLine(line *Line) {
 
 	var configuration interface{}
 	switch line.Type {
+	case LineTypeChain:
+		configuration = line.GroupMembers // order matters; includeLine visits each hop below
 	case LineTypeVPN:
 		configuration = runtimeConfigurationVPNLine{
 			Server:        line.VPNServer,

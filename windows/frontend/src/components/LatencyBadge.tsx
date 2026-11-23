@@ -20,7 +20,7 @@ export const LatencyBadge: React.FC<{
   onTest,
 }) => {
   const needsConnection =
-    !isConnected && (lineType === "vpn" || lineType === "tailscale");
+    !isConnected && (lineType === "vpn" || lineType === "tailscale" || lineType === "chain");
 
   const testing = Boolean(record?.testing);
   const ms = record?.milliseconds;
